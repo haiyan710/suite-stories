@@ -1,0 +1,23 @@
+.env
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.log
+data/bot.lock
+# Hotel-supplied (often confidential) photos and layouts that embed them
+artifacts/documents/
+artifacts/*/layouts/
+# Large partner document sets live outside the repo (../ILTM_Cannes_Accommodation)
+ILTM_Cannes_Accommodation/
+# Reference material (partner decks, screenshots of other people's posts): never commit
+*_Hotel_Partnerships_*.pdf
+My Documents*/
+references/
+# Generated output, runtime state and live regression reports stay local
+artifacts/
+data/

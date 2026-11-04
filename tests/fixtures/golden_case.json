@@ -1,0 +1,35 @@
+{
+  "case": "harbour_grand_kobe_experience_quality",
+  "property": "Harbour Grand Kobe",
+  "request": "Research Harbour Grand Kobe and find one stay experience worth promoting.",
+  "evaluation_only": true,
+  "pass_threshold": 28,
+  "property_terms": [
+    "kobe",
+    "harbourland",
+    "hotel",
+    "harbour grand"
+  ],
+  "destination_terms": [
+    "kansai",
+    "kyoto",
+    "nara",
+    "himeji",
+    "destination"
+  ],
+  "criteria": [
+    "experience_strength",
+    "booking_desire",
+    "property_specificity",
+    "evidence_quality",
+    "destination_relationship",
+    "editorial_originality",
+    "visual_story_potential",
+    "non_genericness"
+  ],
+  "generator_must_not_receive": [
+    "expected final answer",
+    "required slogan",
+    "required concept title"
+  ]
+}

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.haiyen.suite-stories-bot</string>
+
+    <!--
+      The Suite Stories Slack bot, always on while the Mac is logged in: launchd starts it at login (RunAtLoad)
+      and restarts it when it exits (KeepAlive). main() holds data/bot.lock, so a hand-started second copy exits.
+      Install (from the project root; fills in __HOME__ and __PROJECT_DIR__):
+                sed -e "s#__PROJECT_DIR__#$PWD#g" -e "s#__HOME__#$HOME#g" \
+                    deploy/launchd/com.haiyen.suite-stories-bot.plist \
+                    > ~/Library/LaunchAgents/com.haiyen.suite-stories-bot.plist &&
+                launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.haiyen.suite-stories-bot.plist
+      Restart (after a code change):  launchctl kickstart -k gui/$(id -u)/com.haiyen.suite-stories-bot
+      Off:      launchctl bootout gui/$(id -u)/com.haiyen.suite-stories-bot
+      PATH includes ~/.local/bin for the claude CLI (LLM_PROVIDER=claude_cli).
+    -->
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <!--
+      caffeinate keeps the Mac awake while the bot runs (-i: no idle sleep; -s: no system sleep on AC power),
+      so Slack requests are answered at once instead of on the next wake. The display still sleeps, and
+      closing the lid without an external display still sleeps the Mac.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-is</string>
+        <string>__PROJECT_DIR__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>app</string>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>__PROJECT_DIR__/data/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_DIR__/data/bot.log</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- a failed start (lock held by a hand-started bot, network down) is retried every 30 s -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>

@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0%" stop-color="#3FA79F"/>
+      <stop offset="100%" stop-color="#14524E"/>
+    </radialGradient>
+    <radialGradient id="lens" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#BFE7F2" stop-opacity="0.55"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFE08A"/>
+      <stop offset="100%" stop-color="#D9A030"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- sparkles -->
+  <g fill="#FFD66B">
+    <path d="M170 210 l14 34 l34 14 l-34 14 l-14 34 l-14 -34 l-34 -14 l34 -14z"/>
+    <path d="M860 170 l10 24 l24 10 l-24 10 l-10 24 l-10 -24 l-24 -10 l24 -10z"/>
+    <path d="M880 470 l8 18 l18 8 l-18 8 l-8 18 l-8 -18 l-18 -8 l18 -8z"/>
+    <path d="M130 560 l8 18 l18 8 l-18 8 l-8 18 l-8 -18 l-18 -8 l18 -8z"/>
+  </g>
+
+  <g stroke="#3A2A26" stroke-width="14" stroke-linejoin="round" stroke-linecap="round">
+    <!-- jacket -->
+    <path d="M250 1024 C260 860 360 790 512 790 C664 790 764 860 774 1024 Z" fill="#D2453B"/>
+    <path d="M512 800 L512 1024" fill="none" stroke-width="10"/>
+    <circle cx="470" cy="880" r="15" fill="url(#gold)" stroke-width="8"/>
+    <circle cx="470" cy="960" r="15" fill="url(#gold)" stroke-width="8"/>
+    <circle cx="554" cy="880" r="15" fill="url(#gold)" stroke-width="8"/>
+    <circle cx="554" cy="960" r="15" fill="url(#gold)" stroke-width="8"/>
+    <!-- bow tie -->
+    <path d="M512 800 L440 768 L440 840 Z M512 800 L584 768 L584 840 Z" fill="url(#gold)" stroke-width="10"/>
+    <circle cx="512" cy="802" r="18" fill="url(#gold)" stroke-width="10"/>
+
+    <!-- ears -->
+    <path d="M300 380 L278 170 L460 300 Z" fill="#FFF4E6"/>
+    <path d="M724 380 L746 170 L564 300 Z" fill="#FFF4E6"/>
+    <path d="M318 330 L306 228 L400 296 Z" fill="#F7A8B4" stroke="none"/>
+    <path d="M706 330 L718 228 L624 296 Z" fill="#F7A8B4" stroke="none"/>
+
+    <!-- head -->
+    <ellipse cx="512" cy="530" rx="262" ry="240" fill="#FFF4E6"/>
+  </g>
+
+  <!-- blush -->
+  <ellipse cx="370" cy="618" rx="46" ry="26" fill="#F7A8B4" opacity="0.75"/>
+  <ellipse cx="672" cy="630" rx="46" ry="26" fill="#F7A8B4" opacity="0.75"/>
+
+  <!-- left eye (normal size) -->
+  <ellipse cx="408" cy="528" rx="34" ry="42" fill="#2B1E1B"/>
+  <circle cx="420" cy="512" r="13" fill="#FFFFFF"/>
+  <circle cx="398" cy="545" r="6" fill="#FFFFFF"/>
+
+  <!-- nose + mouth -->
+  <path d="M496 596 L528 596 L512 616 Z" fill="#E97A8B" stroke="#3A2A26" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M512 618 C506 650 470 652 462 630 M512 618 C518 650 554 652 562 630"
+        fill="none" stroke="#3A2A26" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- whiskers -->
+  <g stroke="#3A2A26" stroke-width="8" stroke-linecap="round" fill="none">
+    <path d="M300 600 L200 588"/>
+    <path d="M302 630 L206 640"/>
+  </g>
+
+  <!-- magnifying glass over the right eye: the eye looks huge through it -->
+  <g stroke-linecap="round">
+    <path d="M688 610 L812 742" stroke="#3A2A26" stroke-width="58"/>
+    <path d="M688 610 L812 742" stroke="#8A4E2B" stroke-width="38"/>
+    <circle cx="616" cy="522" r="112" fill="url(#lens)"/>
+    <ellipse cx="616" cy="524" rx="62" ry="74" fill="#2B1E1B"/>
+    <circle cx="640" cy="494" r="24" fill="#FFFFFF"/>
+    <circle cx="598" cy="556" r="11" fill="#FFFFFF"/>
+    <path d="M556 470 C572 448 598 440 620 442" stroke="#FFFFFF" stroke-width="12" fill="none" opacity="0.9"/>
+    <circle cx="616" cy="522" r="112" fill="none" stroke="#3A2A26" stroke-width="40"/>
+    <circle cx="616" cy="522" r="112" fill="none" stroke="url(#gold)" stroke-width="24"/>
+    <!-- paw on the handle -->
+    <ellipse cx="782" cy="712" rx="54" ry="44" fill="#FFF4E6" stroke="#3A2A26" stroke-width="14"/>
+    <path d="M770 690 L770 712 M796 690 L796 712" stroke="#3A2A26" stroke-width="8"/>
+  </g>
+
+  <!-- bellhop pillbox hat, tilted -->
+  <g transform="rotate(-14 512 300)" stroke="#3A2A26" stroke-width="14" stroke-linejoin="round">
+    <path d="M412 330 L424 222 C430 200 594 200 600 222 L612 330 Z" fill="#D2453B"/>
+    <rect x="404" y="300" width="216" height="44" rx="14" fill="url(#gold)"/>
+    <ellipse cx="512" cy="212" rx="90" ry="20" fill="#E25A4E"/>
+    <circle cx="512" cy="186" r="16" fill="url(#gold)" stroke-width="10"/>
+  </g>
+</svg>
