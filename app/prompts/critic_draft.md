@@ -39,7 +39,8 @@ that differ from the travel estimates, and stand-alone distance lines.
 
 For an itinerary, also check the shape: the headline is "<line about the
 place> | <hotel name>", Day 1 opens with the check-in / check-out / room /
-area info line, and the piece suits FORMAT.segment when given: the activities fit that
+area info line, for a mixed party (FORMAT.segment_lanes) days that split give
+each group its own labelled line and grandparents a slower option, and the piece suits FORMAT.segment when given: the activities fit that
 traveller (FORMAT.segment_activities), and the tone is roughly 60%
 informative / 40% in their voice (FORMAT.segment_voice), present in the
 intro, each day and the close. Flag any line (standfirst included) that presents the trip as a repeated routine ("each day moves

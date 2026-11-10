@@ -1717,3 +1717,14 @@ def test_amendments_are_only_the_extra_instructions():
     assert EditorialOrchestrator._amendment_from("<@U1> write a sample draft again.") == ""
     note = "Write a sample draft. Keep Day 4 inside the city (no day trip)."
     assert EditorialOrchestrator._amendment_from(note) == note
+
+
+def test_a_request_for_every_kind_of_traveller_is_a_mixed_party_with_lanes():
+    parse = EditorialOrchestrator._parse_segment
+    assert parse("Plan Seollal for all Korean traveller groups") == "mixed"
+    assert parse("for families, couples and solo travellers") == "mixed"
+    assert parse("for a honeymoon couple") == "couples"
+    assert parse("open to all guests") == ""
+    piece = EditorialOrchestrator._segment_format("mixed")
+    assert "For grandparents" in piece["segment_lanes"]
+    assert "segment_lanes" not in EditorialOrchestrator._segment_format("couples")

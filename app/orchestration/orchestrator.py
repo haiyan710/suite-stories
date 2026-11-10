@@ -163,16 +163,31 @@ class EditorialOrchestrator:
         "gastronomy": ("food-led travellers", "signature restaurants, chef's tables and markets",
                        "flavour, the table, chef, discovery, appetite, the first bite",
                        r"foodie|food lover|gastronom|culinary|ẩm thực|미식"),
+        # One piece for every kind of reader, or a party that mixes them: the hotel is the shared
+        # base and each day gives each group its own pace (a client's favourite version did this).
+        "mixed": ("a mixed party: grandparents, couples, siblings and friends, and solo travellers",
+                  "a shared base and shared meals, with each day split by pace: rest, short walks and the "
+                  "hotel's lounges for grandparents; fuller days out for the walkers; a special dinner for "
+                  "couples; a walkable city for solo travellers",
+                  "together, at your own pace, everyone, come back to the same table, a room of your own",
+                  r"\ball\b[\w\s-]{0,25}?(?:traveller|traveler|reader|customer|guest|audience)s?\s*"
+                  r"(?:groups|types|segments)|every kind of (?:\w+ )?travell?er|mixed (?:party|group)|multi-?generation|"
+                  r"tất cả các nhóm|mọi nhóm khách|모든 고객|모든 여행자"),
     }
+    MIXED_LANES = "**For grandparents ·**, **For the walkers ·**, **For couples ·**, **For solo travellers ·**"
 
     @classmethod
     def _parse_segment(cls, value: str) -> str:
         """The traveller type a request names ("for a honeymoon couple", "cho gia đình"), else ''."""
         text = value.lower()
-        for key, (_label, _focus, _voice, pattern) in cls.TRAVELLER_SEGMENTS.items():
-            if re.search(pattern, text):
-                return key
-        return ""
+        matches = [
+            key for key, (_label, _focus, _voice, pattern) in cls.TRAVELLER_SEGMENTS.items()
+            if re.search(pattern, text)
+        ]
+        if "mixed" in matches or len(matches) > 1:
+            # "for families, couples and solo travellers" is a mixed party, not the first one named.
+            return "mixed"
+        return matches[0] if matches else ""
 
     def _trip_format(self) -> dict[str, Any]:
         if not self._trip_nights:
@@ -207,10 +222,13 @@ class EditorialOrchestrator:
     @classmethod
     def _segment_format(cls, segment: str) -> dict[str, str]:
         label, focus, voice, _pattern = cls.TRAVELLER_SEGMENTS[segment]
-        return {
+        piece = {
             "segment": label, "segment_activities": focus, "segment_voice": voice,
             "tone_mix": f"about 60% informative, 40% written for {label} in their voice",
         }
+        if segment == "mixed":
+            piece["segment_lanes"] = cls.MIXED_LANES
+        return piece
 
     @staticmethod
     def _parse_trip_nights(value: str) -> int:

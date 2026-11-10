@@ -58,6 +58,8 @@ plan (for FORMAT.segment when given):
 - Each day in the outline has its own highlight; never describe the plan as
   a repeated routine, and the angle must not say every day follows the same
   pattern.
+- With FORMAT.segment_lanes (a mixed party), each outline day that splits
+  names what each group does (grandparents' slower option first).
 - With FORMAT.segment, every outline day says what the day means for that
   traveller in their voice (FORMAT.segment_voice), and why_readers_want_it
   speaks to them directly.

@@ -70,6 +70,13 @@ If FORMAT is an itinerary ({"type": "itinerary", "nights": N}):
     using the vocabulary in FORMAT.segment_voice naturally across the intro,
     every day and the close (never a keyword list, never in every sentence).
   - The voice never adds facts: emotion words frame verified details only.
+- If FORMAT has segment_lanes (a mixed party), the hotel is the shared base
+  and the shared meals bring everyone back together. Where a day works
+  differently for different travellers, give each group its own short line,
+  starting with its bold lane label (FORMAT.segment_lanes, e.g. "**For
+  grandparents ·** a rest upstairs, then tea under the skylight"). Grandparents
+  may be tired: give them rest, short walks and the hotel's lounges. Do not
+  split every moment; shared moments stay shared.
 - Inside each day, move through timed moments, each starting with a time or
   part of day in bold ("**3pm · Settle in**", "**Evening · ...**") followed by
   one to three sentences.

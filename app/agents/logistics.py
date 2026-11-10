@@ -48,7 +48,7 @@ DWELL_MIN = {
     "museum": 75, "park": 45, "market": 60, "area": 90, "spa": 90,
 }
 # Daily time in cars before a plan stops feeling like a holiday.
-DAILY_TRAVEL_LIMIT_MIN = {"slow": 120, "couples": 120, "wellness": 120}
+DAILY_TRAVEL_LIMIT_MIN = {"slow": 120, "couples": 120, "wellness": 120, "mixed": 120}
 DEFAULT_DAILY_TRAVEL_LIMIT_MIN = 180
 # A match farther than this from the hotel is a different place with the same name.
 MAX_DISTANCE_KM = 150
