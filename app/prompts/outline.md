@@ -13,6 +13,10 @@ insider_notes) never name a source ("per the hotel", "guests say", a
 publication): soften or make the claim concrete instead. FORMAT and
 house_style rules apply.
 
+When VENUES is present, each day's beats use the stop's hook (why go), never
+place a stop on one of its closed_days, and keep hotel_spaces that are not
+open on the trip dates out of the days (at most one return tip).
+
 When FORMAT.calendar is present, it gives each day's real date, weekday and
 holidays: use it for the days in the outline (and drop any different date or
 weekday the concept gives).

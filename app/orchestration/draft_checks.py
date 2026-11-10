@@ -31,6 +31,11 @@ _DATE_IN_HEADING = re.compile(
 )
 _CAR_TIME = re.compile(r"about\s+(\d{2,3})\s*(?:–|-|to)\s*(\d{2,3})\s*min(?:ute)?s?", re.I)
 MAX_CAR_MINUTES = 150
+# A closed seasonal space may appear only as a reason to come back.
+_RETURN_TIP = re.compile(
+    r"warm|spring|summer|autumn|return|come back|next (?:visit|time|trip)|reopen|later in the year|in season|"
+    r"another season", re.I,
+)
 
 
 def _sections(body: str) -> list[tuple[int | None, int, int]]:
@@ -94,6 +99,7 @@ def _written_dates(text: str, year: int) -> list[tuple[str, str, date | None]]:
 def check_draft(
     body: str, *, headline: str = "", standfirst: str = "",
     calendar: TripCalendar | None = None, banned_phrases: Sequence[str] = (),
+    venues: dict | None = None,
 ) -> list[str]:
     """Revision instructions for problems Python can see in a draft."""
     issues: list[str] = []
@@ -116,6 +122,29 @@ def check_draft(
                     f'"{written}" is outside the trip, which runs from {first.label} to {last.label}. '
                     "Use the CALENDAR's dates and weekdays."
                 )
+    venues = venues or {}
+    if calendar is not None:
+        for venue in venues.get("venues") or []:
+            closed = set(venue.get("closed_days") or [])
+            name = str(venue.get("name") or "")
+            for day_number, start, end in _sections(body) if closed and name else []:
+                day = calendar.day(day_number) if day_number else None
+                if day and day.weekday in closed and name.lower() in body[start:end].lower():
+                    issues.append(
+                        f"{name} is closed on {day.weekday}s, but Day {day.day} ({day.label}) sends guests "
+                        "there: move it to another day or drop it."
+                    )
+    for space in venues.get("hotel_spaces") or []:
+        name = str(space.get("name") or "")
+        if space.get("open_on_trip") != "no" or not name:
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", body):
+            if name.lower() in sentence.lower() and not _RETURN_TIP.search(sentence):
+                issues.append(
+                    f"{name} is not open on the trip dates ({space.get('note') or 'seasonal'}): mention it only "
+                    "as a reason to come back in its season, not as part of this stay."
+                )
+                break
     lowered = text.lower()
     for phrase in banned_phrases:
         phrase = phrase.strip()

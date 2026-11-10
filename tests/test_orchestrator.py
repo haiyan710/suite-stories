@@ -1775,3 +1775,61 @@ def test_layout_renders_ask_notes_for_the_editor():
     from app.artifacts.layout import _inline
     html = _inline("Order the pasta [ASK ANNA: two winter dishes] tonight.")
     assert '<mark class="ask"><b>Ask Anna</b> two winter dishes</mark>' in html
+
+
+def test_venue_notes_keep_only_cited_stops_and_research_the_missing_ones_once(tmp_path: Path):
+    import json as _json
+    from dataclasses import replace as _replace
+    from app.llm.base import LLMResponse
+
+    o, db, researcher, *_ = setup_orchestrator(tmp_path, ['{"intent":"GENERAL_CONVERSATION"}'])
+    o._settings = _replace(o._settings, venue_notes=True)
+    o._trip_nights = 4
+    pid = seed_project(db, thread="C:v")
+    research = ResearchResult(status="complete", verified_facts=[
+        {"fact": "City Gallery holds the river statue and is closed on Mondays.",
+         "confidence": "verified_authoritative_secondary", "source_ids": ["S1"]},
+        {"fact": "The hotel's rooftop reopens in mid-May.", "confidence": "verified_official", "source_ids": ["S2"]},
+    ])
+    answers = [
+        {"venues": [
+            {"name": "City Gallery", "hook": "the river statue", "closed_days": ["Mondays"], "facts": ["F1"]},
+            {"name": "Invented Bistro", "hook": "Great pasta", "facts": ["F1"]},
+        ], "hotel_spaces": [{"name": "rooftop", "open_on_trip": "no", "note": "reopens mid-May", "facts": ["F2"]}],
+         "missing": ["Owl Villa"]},
+        {"venues": [{"name": "City Gallery", "hook": "the river statue", "closed_days": ["Monday"], "facts": ["F1"]}],
+         "hotel_spaces": [], "missing": ["Owl Villa"]},
+    ]
+
+    class Fast:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, *, system=None, **kwargs):
+            self.calls += 1
+            return LLMResponse(text=_json.dumps(answers[min(self.calls - 1, 1)]))
+
+    o._fast_provider = Fast()
+    concept = {"possible_story_structure": "Day 2: City Gallery. Day 4: Owl Villa and Invented Bistro."}
+    notes = o._venue_notes(pid, "Harbour Grand Kobe", concept, research)
+    assert [v["name"] for v in notes["venues"]] == ["City Gallery"]
+    assert notes["venues"][0]["closed_days"] == ["Monday"]
+    # One research round for Owl Villa; the fake researcher adds no facts, so the
+    # second pass has nothing to read and the first notes are kept.
+    assert o._fast_provider.calls == 1
+    assert researcher.tasks[-1].destination and "Owl Villa" in researcher.tasks[-1].followup_questions[0]
+
+
+def test_closed_days_and_closed_hotel_spaces_are_checked_against_the_calendar():
+    from datetime import date
+    from app.orchestration.calendar import TripCalendar
+    from app.orchestration.draft_checks import check_draft
+    cal = TripCalendar.build(date(2027, 2, 6), 4)
+    venues = {"venues": [{"name": "City Gallery", "closed_days": ["Monday"]}],
+              "hotel_spaces": [{"name": "rooftop", "open_on_trip": "no", "note": "reopens mid-May"}]}
+    body = ("## Day 2 · Sunday 7 February\nCity Gallery.\n\n## Day 3 · Monday 8 February\n"
+            "Back to the City Gallery, then drinks on the rooftop.\n\nIn the warmer months, come back for the rooftop.")
+    issues = check_draft(body, calendar=cal, venues=venues)
+    assert any("closed on Mondays, but Day 3" in i for i in issues)
+    assert sum("rooftop is not open" in i for i in issues) == 1
+    assert not check_draft("In the warmer months, the rooftop is the place for a drink.", calendar=cal, venues=venues)

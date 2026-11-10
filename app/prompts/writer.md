@@ -33,6 +33,12 @@ Hard rules:
   and it is never the only support for an hour, a price, a distance or the
   booking case (use [TK] for those).
 - OUTLINE.house_style lists the house rules and banned phrases: follow them all.
+- OUTLINE.venues (when given) has notes for each outside stop: use its hook
+  for the why-go line, its dish for a restaurant, its booking and free_or_fee
+  tips, its night note (a monument lit after dark makes a good after-dinner
+  moment), and never send guests to a place on one of its closed_days (check
+  the calendar weekday). OUTLINE.venues.hotel_spaces marked open_on_trip "no"
+  appear only as a reason to come back in their season.
 - Every outside place the plan sends the reader to gets one line on why it is
   worth going (a story, a masterpiece, a view, how it looks at night), from
   the evidence; a name with no reason is a list, not a recommendation.

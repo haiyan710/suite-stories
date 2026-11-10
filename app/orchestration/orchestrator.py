@@ -538,6 +538,13 @@ class EditorialOrchestrator:
             outline = {**outline, "user_amendments": amendments}
         hotel_name = str(state.get("project", {}).get("hotel", ""))
         outline = {**outline, **self._house_style_payload(hotel_name)}
+        venues = dict(concept_state.get("venues") or {})
+        if not venues and piece_format.get("type") == "itinerary":
+            venues = self._venue_notes(project_id, hotel_name, concept, research)
+            if venues:
+                concept_state["venues"] = venues
+        if venues:
+            outline = {**outline, "venues": venues}
         draft: DraftResult | None = None
         critique: Any = None
         qa_revisions: list[str] = []
@@ -564,7 +571,7 @@ class EditorialOrchestrator:
                 project_id=project_id, mode="DRAFT", concept=concept, research=gated.to_dict(),
                 outline=outline, draft=draft.to_dict(),
             ), project_id, step_id=f"critic_draft_{attempt:02d}")
-            critique = self._with_draft_checks(critique, draft, calendar)
+            critique = self._with_draft_checks(critique, draft, calendar, venues)
             if critique.verdict == "PASS" or not critique.revision_instructions:
                 break
             qa_revisions = list(critique.revision_instructions)
@@ -597,7 +604,7 @@ class EditorialOrchestrator:
                 project_id=project_id, mode="DRAFT", concept=concept, research=gated.to_dict(),
                 outline=outline, draft=draft.to_dict(),
             ), project_id, step_id=f"critic_draft_final{suffix}")
-            critique = self._with_draft_checks(critique, draft, calendar)
+            critique = self._with_draft_checks(critique, draft, calendar, venues)
         polish = list(getattr(critique, "polish", None) or [])
         if fixes.get("applied") and polish and critique.verdict != "FAIL":
             # Every re-check finds a little new polish; apply the last one without another
@@ -613,7 +620,9 @@ class EditorialOrchestrator:
         if outline:
             concept_state["outline"] = {
                 k: v for k, v in outline.items()
-                if k not in {"travel_estimates", "travel_fixes", "calendar", "user_amendments", "house_style", "contacts"}
+                if k not in {
+                    "travel_estimates", "travel_fixes", "calendar", "user_amendments", "house_style", "contacts", "venues",
+                }
             }
         concept_state["sample_draft"] = {
             **draft.to_dict(), "qa": critique.to_dict(), "qa_fixes": fixes, "private_sources": private,
@@ -642,11 +651,13 @@ class EditorialOrchestrator:
             return draft
         return replace(draft, body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body))
 
-    def _with_draft_checks(self, critique: Any, draft: DraftResult, calendar: TripCalendar | None) -> Any:
+    def _with_draft_checks(
+        self, critique: Any, draft: DraftResult, calendar: TripCalendar | None, venues: dict[str, Any] | None = None,
+    ) -> Any:
         """Add what Python can see (dates, house style, travel times) to the critic's fixes."""
         issues = check_draft(
             draft.body, headline=draft.headline, standfirst=draft.standfirst, calendar=calendar,
-            banned_phrases=self._banned_phrases(),
+            banned_phrases=self._banned_phrases(), venues=venues,
         )
         new = [issue for issue in issues if issue not in (critique.revision_instructions or [])]
         if not new:
@@ -880,6 +891,8 @@ class EditorialOrchestrator:
             return "Research: guest reviews, insider tips and the hotel's stories"
         if step_id == "research_itinerary":
             return "Research: restaurants, sights and day trips for the itinerary"
+        if step_id == "research_venues":
+            return "Research: why each stop is worth it, and when it is open"
         if step_id == "ingest_documents":
             return "Research: adding the attached documents to the evidence"
         if step_id.startswith("research_verify"):
@@ -1752,6 +1765,116 @@ class EditorialOrchestrator:
         r"restaurant|dining|dinner|michelin|bib gourmand|50 best|chef|cuisine|tasting menu", re.I,
     )
 
+    # Facts that may say a hotel space is seasonal (open-air spaces, reopening dates).
+    _SEASON_WORDS = re.compile(
+        r"season|summer|winter|spring|autumn|reopen|open from|closed|rooftop|terrace|pool|courtyard|"
+        r"garden|open-air|outdoor|deck", re.I,
+    )
+    # Proper names in a plan: capitalised runs, allowing Romance/English particles inside.
+    _PROPER_NAME = re.compile(
+        r"\b[A-Z][\w'’.-]+(?:\s+(?:[A-Z][\w'’.-]+|di|de|del|della|degli|dei|da|of|the|and|e|la|le|il))*"
+    )
+    _NOT_A_NAME = re.compile(
+        r"^(?:Day|Morning|Afternoon|Evening|Night|Dinner|Lunch|Breakfast|Late|Early|Midday|Arrival|Departure|"
+        r"Then|The|A|An|For|After|Before|Back|Return|TK|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b"
+    )
+
+    def _venue_notes(
+        self, project_id: int, hotel: str, concept: dict[str, Any], research: ResearchResult,
+        *, allow_research: bool = True,
+    ) -> dict[str, Any]:
+        """Why each stop is worth it, when it is closed, a dish, and which hotel spaces are open.
+
+        One fast call over the gated facts that name the plan's places (and seasonal
+        hotel facts). A note is kept only if its name appears in a fact it cites. Places
+        with no reason to go get one short research round, then the notes are redone.
+        """
+        if not self._settings.venue_notes:
+            return {}
+        plan = " ".join(str(concept.get(k) or "") for k in ("possible_story_structure", "strongest_experience"))
+        if not plan.strip():
+            return {}
+        names = {
+            n.strip(" .'’") for n in self._PROPER_NAME.findall(plan)
+            if len(n) > 3 and not self._NOT_A_NAME.match(n) and n.lower() not in hotel.lower()
+        }
+        facts, seen = [], set()
+        for item in self._gated_research(research).verified_facts:
+            text = fact_text(item) if isinstance(item, dict) else ""
+            if not text or text in seen:
+                continue
+            lowered = text.lower()
+            if any(n.lower() in lowered for n in names) or self._SEASON_WORDS.search(text):
+                seen.add(text)
+                facts.append(text)
+        facts = facts[-160:]
+        if not facts:
+            return {}
+        catalogue = [{"id": f"F{i}", "fact": text} for i, text in enumerate(facts, 1)]
+        calendar = self._calendar_for(self._trip_nights)
+        self._notify(STEP_PROGRESS_PREFIX + "Checking each stop: why go, closed days and seasons")
+        try:
+            response = self._fast_provider.complete(
+                [LLMMessage(role="user", content=json.dumps({
+                    "hotel": hotel, "calendar": calendar.lines() if calendar else [],
+                    "plan": plan[:6000], "facts": catalogue,
+                }, ensure_ascii=False))],
+                system=load_prompt("venue_notes"), max_tokens=3000, temperature=0.1,
+            )
+        except AgentCancelled:
+            raise
+        except Exception:
+            logger.warning("venue notes failed", exc_info=True)
+            return {}
+        data = extract_json_block(response.text)
+        if not isinstance(data, dict):
+            return {}
+        by_id = {entry["id"]: entry["fact"].lower() for entry in catalogue}
+        weekdays = {d.lower(): d for d in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")}
+
+        def cited(entry: dict[str, Any]) -> list[str]:
+            return [by_id[str(i)] for i in entry.get("facts") or [] if str(i) in by_id]
+
+        venues = []
+        for entry in data.get("venues") or []:
+            name = str(entry.get("name") or "").strip() if isinstance(entry, dict) else ""
+            if not name or not any(name.lower() in fact for fact in cited(entry)):
+                continue
+            venues.append({
+                "name": name, "kind": str(entry.get("kind") or ""),
+                **{k: str(entry.get(k) or "").strip() for k in ("hook", "dish", "booking", "free_or_fee", "night")},
+                "closed_days": [
+                    weekdays[str(d).strip().lower().rstrip("s")] for d in entry.get("closed_days") or []
+                    if str(d).strip().lower().rstrip("s") in weekdays
+                ],
+            })
+        spaces = [
+            {"name": str(entry.get("name")).strip(), "open_on_trip": str(entry.get("open_on_trip")),
+             "note": str(entry.get("note") or "").strip()}
+            for entry in data.get("hotel_spaces") or []
+            if isinstance(entry, dict) and entry.get("name") and cited(entry)
+            and str(entry.get("open_on_trip")) in {"yes", "no", "unknown"}
+        ]
+        missing = [str(m).strip() for m in data.get("missing") or [] if str(m).strip()][:6]
+        notes = {"venues": venues, "hotel_spaces": spaces} if venues or spaces else {}
+        if missing and allow_research:
+            questions = [
+                f"{name} (near {hotel}): one specific reason it is worth visiting (its story, a famous work, "
+                "the view, how it looks at night), its opening days and closures, and what to book ahead"
+                for name in missing
+            ]
+            research = self._call(
+                "researcher", self._researcher.run,
+                ResearchTask(
+                    project_id=project_id, hotel_name=hotel, original_request=self._active_goal,
+                    followup_questions=questions, existing_research=research.to_dict(),
+                    trip_nights=self._trip_nights, destination=True,
+                ), project_id, step_id="research_venues",
+            )
+            self._db.update_project_state(project_id, "research", research.to_dict())
+            return self._venue_notes(project_id, hotel, concept, research, allow_research=False) or notes
+        return notes
+
     def _dining_picks(self, hotel: str, research: ResearchResult) -> list[dict[str, str]]:
         """Up to 3 named outside dinner restaurants for an itinerary, from gated evidence only.
 
@@ -1858,7 +1981,12 @@ class EditorialOrchestrator:
             }})
             if logistics:
                 concept_state["logistics"] = logistics
-        outline = self._editorial_outline(editorial, critique, research, logistics=logistics)
+            venues = self._venue_notes(project_id, hotel, editorial.to_dict(), research)
+            if venues:
+                concept_state["venues"] = venues
+        outline = self._editorial_outline(
+            editorial, critique, research, logistics=logistics, venues=concept_state.get("venues"),
+        )
         if outline:
             if logistics:
                 outline["getting_around"] = self._getting_around(logistics)
@@ -2749,7 +2877,7 @@ class EditorialOrchestrator:
 
     def _editorial_outline(
         self, editorial: EditorialResult, critique: Any, research: ResearchResult,
-        *, logistics: dict[str, Any] | None = None,
+        *, logistics: dict[str, Any] | None = None, venues: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Condense the concept + critic notes into a writing framework (one fast LLM call)."""
         supporting = {str(sid) for sid in editorial.supporting_evidence_ids}
@@ -2785,6 +2913,8 @@ class EditorialOrchestrator:
         if logistics:
             payload["logistics"] = {"issues": logistics.get("issues", []), "legs": logistics.get("lines", [])}
         payload["house_style"] = self._house_style_payload(payload["hotel"])["house_style"]
+        if venues:
+            payload["venues"] = venues
         try:
             self._notify(STEP_PROGRESS_PREFIX + "Writing it up as a short outline")
             response = self._fast_provider.complete(

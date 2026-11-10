@@ -60,7 +60,10 @@ the Michelin Guide may be named) and each such line gets a direct rewrite in
 the revision instructions; guest reports name no individual and are never the
 only support for an hour, price, distance or the booking case; every outside
 place the plan recommends has a line on why to go, and every restaurant names a
-dish or carries an [ASK ...] note (keep [ASK ...] notes, like [TK]); the draft criticises nothing about the hotel (it is
+dish or carries an [ASK ...] note (keep [ASK ...] notes, like [TK]);
+OUTLINE.venues (when given) is the stop list: no place on one of its
+closed_days, hotel_spaces not open on the trip only as a return tip, and a
+stop whose hook the draft ignores gets a revision to add it; the draft criticises nothing about the hotel (it is
 promotional; a drawback may appear only as a helpful tip); booking-platform
 benefits (breakfast for two, credits, upgrades) are not presented as the
 hotel's own offers; the English is plain enough to translate (no idioms).
