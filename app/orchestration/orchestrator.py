@@ -905,18 +905,24 @@ class EditorialOrchestrator:
 
         hero_asset = catalogue.get(str(plan.get("hero") or ""))
         by_section: dict[int, Photo] = {}
+        used_keys: set[str] = set()
         for item in plan.get("sections") or []:
             if not isinstance(item, dict) or str(item.get("image")) not in catalogue:
                 continue
             index = int(item.get("section", -1))
             if 0 <= index < section_count and index not in by_section:
                 by_section[index] = photo(catalogue[str(item["image"])], str(item.get("caption") or ""))
+                used_keys.add(str(item["image"]))
         return Page(
             hotel=hotel, headline=draft.headline or "Sample draft", standfirst=draft.standfirst,
             body=draft.body, kicker=f"Suite Stories · {hotel}",
             hero=photo(hero_asset, str(plan.get("hero_caption") or ""), 2000) if hero_asset else None,
             photos=by_section, pull_quote=str(plan.get("pull_quote") or "").strip(),
             coda=[photo(asset, "", 900) for asset in coda],
+            gallery=[
+                photo(asset, "", 900) for key, asset in catalogue.items()
+                if key != str(plan.get("hero") or "") and key not in used_keys
+            ][:6],
             footer="Sample draft for internal review, not for publication. " + " · ".join(notes)
             + (" · Photos supplied by the hotel." if hero_asset or by_section or coda else ""),
         )

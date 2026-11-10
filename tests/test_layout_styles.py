@@ -44,3 +44,8 @@ def test_a_page_without_photos_still_renders():
     bare = Page(hotel="Hotel X", headline="Line | Hotel X", standfirst="S", body=BODY)
     for style in STYLES:
         assert "<img" not in render_styled_html(bare, style)
+
+
+def test_unused_photos_close_the_page_as_a_gallery():
+    html = render_styled_html(page(gallery=[Photo(PIXEL, "The lobby")]), "hybrid")
+    assert "More of the hotel" in html and "The lobby" in html
