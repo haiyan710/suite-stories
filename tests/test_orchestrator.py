@@ -1834,3 +1834,14 @@ def test_closed_days_and_closed_hotel_spaces_are_checked_against_the_calendar():
     assert any("closed on Mondays, but Day 3" in i for i in issues)
     assert sum("rooftop is not open" in i for i in issues) == 1
     assert not check_draft("In the warmer months, the rooftop is the place for a drink.", calendar=cal, venues=venues)
+
+
+def test_humanizer_and_fixes_keep_the_writers_source_notes():
+    import json as _json
+    from app.agents.writer import WriterAgent
+    from app.orchestration.handoffs import DraftResult
+    draft = DraftResult(status="complete", headline="H | Hotel", standfirst="S", body="## Day 1\nPasta at Giano.",
+                        source_notes=[{"claim": "Pasta at Giano", "sources": ["S3"]}])
+    fixer = WriterAgent(HumanizeProvider(_json.dumps({"edits": [{"field": "body", "find": "Pasta", "replace": "Fresh pasta"}]})))
+    fixed, applied, _ = fixer.apply_fixes(draft, ["Say fresh pasta."])
+    assert applied == 1 and fixed.source_notes == draft.source_notes

@@ -118,7 +118,7 @@ class WriterAgent:
             status="complete", headline=headline,
             standfirst=str(data.get("standfirst") or "").strip() or draft.standfirst,
             body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body), ask_items=re.findall(ASK_NOTE, body),
-            writer_notes=draft.writer_notes, model=draft.model,
+            writer_notes=draft.writer_notes, model=draft.model, source_notes=list(draft.source_notes),
         )
 
     def apply_fixes(self, draft: DraftResult, instructions: list[str]) -> tuple[DraftResult, int, list[str]]:
@@ -160,7 +160,7 @@ class WriterAgent:
         fixed = DraftResult(
             status="complete", headline=fields["headline"].strip(), standfirst=fields["standfirst"].strip(),
             body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body), ask_items=re.findall(ASK_NOTE, body),
-            writer_notes=draft.writer_notes, model=draft.model,
+            writer_notes=draft.writer_notes, model=draft.model, source_notes=list(draft.source_notes),
         )
         return fixed, applied, skipped
 
