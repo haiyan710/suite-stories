@@ -64,6 +64,8 @@ class Settings:
     logistics_check: bool = False
     # Per-stop notes for itineraries: why go, closed days, dishes, hotel spaces open on the trip dates.
     venue_notes: bool = False
+    # Layout when a request names none: classic | zigzag | image_first | inline | hybrid.
+    layout_style: str = "classic"
     photon_url: str = "https://photon.komoot.io/api/"
     osrm_url: str = "https://routing.openstreetmap.de"
     # On start, replay messages from the last N hours that arrived while offline (0 = off).
@@ -142,6 +144,7 @@ def load_settings(
         humanize_drafts=env.get("HUMANIZE_DRAFTS", "1").strip().lower() not in {"0", "false", "no", ""},
         logistics_check=env.get("LOGISTICS_CHECK", "1").strip().lower() not in {"0", "false", "no", ""},
         venue_notes=env.get("VENUE_NOTES", "1").strip().lower() not in {"0", "false", "no", ""},
+        layout_style=env.get("LAYOUT_STYLE", "hybrid").strip().lower() or "hybrid",
         photon_url=env.get("PHOTON_URL", "https://photon.komoot.io/api/").strip() or "https://photon.komoot.io/api/",
         osrm_url=(env.get("OSRM_URL", "https://routing.openstreetmap.de").strip() or "https://routing.openstreetmap.de").rstrip("/"),
         writer_provider=env.get("WRITER_PROVIDER", "zai").strip().lower() or "zai",

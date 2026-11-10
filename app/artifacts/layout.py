@@ -67,13 +67,13 @@ def _inline(text: str) -> str:
     )
 
 
-def embed_image(path: str) -> str:
+def embed_image(path: str, edge: int = EMBED_MAX_EDGE) -> str:
     """A JPEG data URI for a local photo, downscaled for a light single-file page."""
     from PIL import Image
 
     with Image.open(path) as picture:
         picture = picture.convert("RGB")
-        picture.thumbnail((EMBED_MAX_EDGE, EMBED_MAX_EDGE))
+        picture.thumbnail((edge, edge))
         buffer = io.BytesIO()
         picture.save(buffer, "JPEG", quality=80)
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()

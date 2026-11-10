@@ -14,7 +14,8 @@ from ..agent import AgentCancelled, AgentError
 from ..agents import BuilderAgent, CriticAgent, DesignAgent, EditorialAgent, ResearchAgent, WriterAgent
 from ..agents.logistics import LogisticsAgent, LogisticsTask
 from ..artifacts import ArtifactManager
-from ..artifacts.layout import render_editorial_html, split_sections
+from ..artifacts.layout import embed_image, render_editorial_html, split_sections
+from ..artifacts.layout_styles import STYLES, Page, Photo, render_styled_html
 from ..config import Settings
 from ..llm.base import LLMError, LLMMessage, LLMProvider
 from ..llm.zai_glm import extract_json_block
@@ -441,7 +442,7 @@ class EditorialOrchestrator:
     def _is_layout_request(value: str) -> bool:
         normalized = re.sub(r"\s+", " ", value.lower())
         return bool(re.search(
-            r"\blayout\b|\bpdf\b|with (photos|images|pictures)|có ảnh|bố cục|dàn trang", normalized,
+            r"\blayouts?\b|\bpdf\b|with (photos|images|pictures)|có ảnh|bố cục|dàn trang", normalized,
         ))
 
     @staticmethod
@@ -482,20 +483,22 @@ class EditorialOrchestrator:
                 if k in CritiqueResult.__dataclass_fields__
             })
             try:
-                page = self._build_layout(project_id, state, research, draft, critique)
+                pages = self._build_layout(
+                    project_id, state, research, draft, critique, styles=self._layout_styles(request),
+                )
             except Exception:
                 logger.exception("layout build failed")
                 return OrchestratorOutcome(
                     "I couldn't build the layout this time. Please try again.", project_id=project_id,
                 )
-            concept_state["sample_draft"] = {**saved, "layout_html": str(page)}
+            concept_state["sample_draft"] = {**saved, "layout_html": str(pages[0])}
             self._db.update_project_state(project_id, "concept", concept_state)
             return OrchestratorOutcome(
                 self._format_draft_with_layout(
                     draft, critique, private=bool(saved.get("private_sources")), photos=self._layout_photo_count,
                     fixes=saved.get("qa_fixes"),
                 ),
-                project_id=project_id, attachments=[str(page)],
+                project_id=project_id, attachments=[str(page) for page in pages],
             )
         writer = self._private_writer if private else self._writer
         piece_format = dict(concept_state.get("format") or {})
@@ -631,9 +634,11 @@ class EditorialOrchestrator:
         text = self._format_draft(draft, critique, private=private, fixes=fixes)
         if self._is_layout_request(request):
             try:
-                page = self._build_layout(project_id, state, research, draft, critique)
-                attachments.append(str(page))
-                concept_state["sample_draft"]["layout_html"] = str(page)
+                pages = self._build_layout(
+                    project_id, state, research, draft, critique, styles=self._layout_styles(request),
+                )
+                attachments += [str(page) for page in pages]
+                concept_state["sample_draft"]["layout_html"] = str(pages[0])
                 text = self._format_draft_with_layout(
                     draft, critique, private=private, photos=self._layout_photo_count, fixes=fixes,
                 )
@@ -779,16 +784,50 @@ class EditorialOrchestrator:
         big = [k for k in ranked if size(catalogue[k])[0] >= 1400 and catalogue[k].get("orientation") == "landscape"]
         return big or ranked[:5]
 
+    _LAYOUT_STYLE_WORDS = (
+        ("zigzag", r"zig-?zag|side[- ]by[- ]side|song song|so le|xen kẽ"),
+        ("image_first", r"image[- ]first|photo[- ]first|photos? (?:before|first)|ảnh trước"),
+        ("inline", r"\binline\b|photos? (?:in|inside|within) the text|ảnh (?:ở |xen )?giữa"),
+        ("hybrid", r"hybrid|combined layout|layout kết hợp"),
+        ("classic", r"classic layout|layout cổ điển"),
+    )
+
+    def _layout_styles(self, request: str) -> list[str]:
+        """Layouts a request asks for ("all four layouts", "side by side"), else the configured one."""
+        text = request.lower()
+        if re.search(r"all (?:four |4 |the )?layouts|every layout|(?:4|four) layouts|tất cả (?:các )?layout|cả 4 layout", text):
+            return list(STYLES)
+        named = [style for style, pattern in self._LAYOUT_STYLE_WORDS if re.search(pattern, text)]
+        default = self._settings.layout_style if self._settings.layout_style in (*STYLES, "classic") else "classic"
+        return named or [default]
+
+    @staticmethod
+    def _closed_space_photos(
+        catalogue: dict[str, dict[str, Any]], state: dict[str, Any],
+    ) -> list[str]:
+        """Photos of hotel spaces that are closed on the trip dates: kept for a closing strip."""
+        spaces = ((state.get("concept") or {}).get("venues") or {}).get("hotel_spaces") or []
+        names = [str(s.get("name") or "").lower() for s in spaces if s.get("open_on_trip") == "no"]
+        keys = []
+        for key, asset in catalogue.items():
+            shows = f"{asset.get('evidence', '')} {asset.get('page_context', '')}".lower()
+            if any(name and (name in shows or all(word in shows for word in name.split() if len(word) > 3))
+                   for name in names):
+                keys.append(key)
+        return keys
+
     def _build_layout(
         self, project_id: int, state: dict[str, Any], research: ResearchResult,
-        draft: DraftResult, critique: Any,
-    ) -> Path:
+        draft: DraftResult, critique: Any, *, styles: Sequence[str] = ("classic",),
+    ) -> list[Path]:
         photos = self._cleared_images(research)
         self._notify(STEP_PROGRESS_PREFIX + (
             "Layout: placing the hotel's photos on the page" if photos
             else "Layout: setting the page with empty photo slots (no hotel-supplied photos in this thread)"
         ))
         catalogue = {f"img{i}": asset for i, asset in enumerate(photos, 1)}
+        coda_keys = self._closed_space_photos(catalogue, state)
+        coda = [catalogue.pop(key) for key in coda_keys][:3]
         sections = split_sections(draft.body)
         plan: dict[str, Any] = {}
         # Even without photos the model writes a shot brief for each empty photo slot.
@@ -827,17 +866,57 @@ class EditorialOrchestrator:
         notes = [f"QA by Claude: {str(critique.verdict).replace('_', ' ').lower()}"]
         if draft.tk_items:
             notes.append(f"{len(draft.tk_items)} TK gaps highlighted in yellow")
+        asks = re.findall(r"\[ASK\b[^\]]*\]", draft.body)
+        if asks:
+            notes.append(f"{len(asks)} [ASK] notes for the editor in blue")
         hotel = str(state.get("project", {}).get("hotel", ""))
-        page = render_editorial_html(
-            hotel=hotel, headline=draft.headline or "Sample draft", standfirst=draft.standfirst,
-            body=draft.body, images=catalogue, plan=plan, footer_notes=notes,
-        )
         out_dir = self._settings.artifacts_path / ArtifactManager.safe_slug(hotel or "hotel") / "layouts" / time.strftime("%Y%m%d-%H%M%S")
         out_dir.mkdir(parents=True, exist_ok=True)
         name = re.sub(r"[^A-Za-z0-9]+", "-", draft.headline or "sample-draft").strip("-")[:60] or "sample-draft"
-        html_path = out_dir / f"{name}.html"
-        html_path.write_text(page, encoding="utf-8")
-        return html_path
+        paths: list[Path] = []
+        for style in dict.fromkeys(styles):
+            if style == "classic":
+                page = render_editorial_html(
+                    hotel=hotel, headline=draft.headline or "Sample draft", standfirst=draft.standfirst,
+                    body=draft.body, images=catalogue, plan=plan, footer_notes=notes,
+                )
+            else:
+                page = render_styled_html(
+                    self._styled_page(hotel, draft, catalogue, plan, coda, notes, len(sections)), style,
+                )
+            html_path = out_dir / (f"{name}.html" if len(styles) == 1 else f"{name}-{style}.html")
+            html_path.write_text(page, encoding="utf-8")
+            paths.append(html_path)
+        return paths
+
+    @staticmethod
+    def _styled_page(
+        hotel: str, draft: DraftResult, catalogue: dict[str, dict[str, Any]], plan: dict[str, Any],
+        coda: Sequence[dict[str, Any]], notes: Sequence[str], section_count: int,
+    ) -> Page:
+        def photo(asset: dict[str, Any], caption: str = "", edge: int = 1400) -> Photo:
+            return Photo(
+                embed_image(str(asset.get("local_path") or asset.get("url")), edge),
+                caption or str(asset.get("evidence") or "")[:120], str(asset.get("orientation") or "landscape"),
+            )
+
+        hero_asset = catalogue.get(str(plan.get("hero") or ""))
+        by_section: dict[int, Photo] = {}
+        for item in plan.get("sections") or []:
+            if not isinstance(item, dict) or str(item.get("image")) not in catalogue:
+                continue
+            index = int(item.get("section", -1))
+            if 0 <= index < section_count and index not in by_section:
+                by_section[index] = photo(catalogue[str(item["image"])], str(item.get("caption") or ""))
+        return Page(
+            hotel=hotel, headline=draft.headline or "Sample draft", standfirst=draft.standfirst,
+            body=draft.body, kicker=f"Suite Stories · {hotel}",
+            hero=photo(hero_asset, str(plan.get("hero_caption") or ""), 2000) if hero_asset else None,
+            photos=by_section, pull_quote=str(plan.get("pull_quote") or "").strip(),
+            coda=[photo(asset, "", 900) for asset in coda],
+            footer="Sample draft for internal review, not for publication. " + " · ".join(notes)
+            + (" · Photos supplied by the hotel." if hero_asset or by_section or coda else ""),
+        )
 
     @staticmethod
     def _format_draft_with_layout(

@@ -1845,3 +1845,29 @@ def test_humanizer_and_fixes_keep_the_writers_source_notes():
     fixer = WriterAgent(HumanizeProvider(_json.dumps({"edits": [{"field": "body", "find": "Pasta", "replace": "Fresh pasta"}]})))
     fixed, applied, _ = fixer.apply_fixes(draft, ["Say fresh pasta."])
     assert applied == 1 and fixed.source_notes == draft.source_notes
+
+
+def test_layout_styles_are_read_from_the_request(tmp_path: Path):
+    o, *_ = setup_orchestrator(tmp_path, ['{"intent":"GENERAL_CONVERSATION"}'])
+    assert o._layout_styles("make the layout") == ["classic"]  # the Settings dataclass default
+    assert o._layout_styles("make the layout with photos side by side") == ["zigzag"]
+    assert o._layout_styles("layout with the photos inside the text") == ["inline"]
+    assert o._layout_styles("make all four layouts") == ["zigzag", "image_first", "inline", "hybrid"]
+
+
+def test_all_four_layouts_are_attached_for_a_saved_draft(tmp_path: Path):
+    o, db, pid, glm, _claude, critic = _draft_setup(tmp_path, [CritiqueResult(verdict="PASS", reasons=[])])
+    o.handle_message("Write a sample draft", user_id="U1", thread_key="C:1")
+    outcome = o.handle_message("Make all four layouts for this draft", user_id="U1", thread_key="C:1")
+    assert len(outcome.attachments) == 4 and all(Path(p).is_file() for p in outcome.attachments)
+    assert [Path(p).stem.rsplit("-", 1)[-1] for p in outcome.attachments] == ["zigzag", "image_first", "inline", "hybrid"]
+
+
+def test_photos_of_spaces_closed_on_the_trip_go_to_the_closing_strip():
+    catalogue = {
+        "img1": {"evidence": "Rooftop plunge pool with blue tiles", "page_context": "WET Deck"},
+        "img2": {"evidence": "Walnut-panelled restaurant", "page_context": "Giano"},
+    }
+    state = {"concept": {"venues": {"hotel_spaces": [
+        {"name": "WET Deck", "open_on_trip": "no"}, {"name": "Giano", "open_on_trip": "yes"}]}}}
+    assert EditorialOrchestrator._closed_space_photos(catalogue, state) == ["img1"]
