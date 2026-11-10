@@ -176,7 +176,7 @@ def _is_photo(name: str, mimetype: str) -> bool:
 
 
 def photo_caption_from_name(name: str) -> str:
-    """'GianoRestaurantSalotto1.jpg' -> 'Giano Restaurant Salotto' (a first caption before the vision one)."""
+    """'GardenRestaurantSalotto1.jpg' -> 'Garden Restaurant Salotto' (a first caption before the vision one)."""
     stem = re.sub(r"\.[A-Za-z0-9]+$", "", name)
     stem = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", stem)
     stem = re.sub(r"[_\-]+|\s+\d+\s*$|\d+$", " ", stem)

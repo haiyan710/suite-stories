@@ -1763,7 +1763,7 @@ def test_a_named_source_in_the_copy_is_sent_back_by_the_house_style_check(tmp_pa
             from app.orchestration.handoffs import DraftResult
             self.tasks.append(task)
             return DraftResult(status="complete", headline="Garden Evenings", standfirst="One garden.",
-                               body="## Morning\nOne reviewer loved breakfast at Giano. [ASK ANNA: a dish to order]",
+                               body="## Morning\nOne reviewer loved breakfast at Orto. [ASK ANNA: a dish to order]",
                                model=self.label)
 
     o._writer = glm = AttributingWriter("GLM-5.3-Flash")
@@ -1840,8 +1840,8 @@ def test_humanizer_and_fixes_keep_the_writers_source_notes():
     import json as _json
     from app.agents.writer import WriterAgent
     from app.orchestration.handoffs import DraftResult
-    draft = DraftResult(status="complete", headline="H | Hotel", standfirst="S", body="## Day 1\nPasta at Giano.",
-                        source_notes=[{"claim": "Pasta at Giano", "sources": ["S3"]}])
+    draft = DraftResult(status="complete", headline="H | Hotel", standfirst="S", body="## Day 1\nPasta at Orto.",
+                        source_notes=[{"claim": "Pasta at Orto", "sources": ["S3"]}])
     fixer = WriterAgent(HumanizeProvider(_json.dumps({"edits": [{"field": "body", "find": "Pasta", "replace": "Fresh pasta"}]})))
     fixed, applied, _ = fixer.apply_fixes(draft, ["Say fresh pasta."])
     assert applied == 1 and fixed.source_notes == draft.source_notes
@@ -1865,11 +1865,11 @@ def test_all_four_layouts_are_attached_for_a_saved_draft(tmp_path: Path):
 
 def test_photos_of_spaces_closed_on_the_trip_go_to_the_closing_strip():
     catalogue = {
-        "img1": {"evidence": "Rooftop plunge pool with blue tiles", "page_context": "WET Deck"},
-        "img2": {"evidence": "Walnut-panelled restaurant", "page_context": "Giano"},
+        "img1": {"evidence": "Rooftop plunge pool with blue tiles", "page_context": "Sky Deck"},
+        "img2": {"evidence": "Walnut-panelled restaurant", "page_context": "Orto"},
     }
     state = {"concept": {"venues": {"hotel_spaces": [
-        {"name": "WET Deck", "open_on_trip": "no"}, {"name": "Giano", "open_on_trip": "yes"}]}}}
+        {"name": "Sky Deck", "open_on_trip": "no"}, {"name": "Orto", "open_on_trip": "yes"}]}}}
     assert EditorialOrchestrator._closed_space_photos(catalogue, state) == ["img1"]
 
 
