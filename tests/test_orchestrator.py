@@ -1738,7 +1738,8 @@ def test_house_style_and_contacts_can_be_set_from_slack_and_reach_the_writer(tmp
     import re as _re
     rule_id = int(_re.search(r"#(\d+)", reply).group(1))
     assert "Banned" in o.handle_message("banned phrase: hidden gem | must-see", user_id="U1", thread_key="C:1").markdown
-    assert "contact at" in o.handle_message("hotel contact: Anna", user_id="U1", thread_key="C:1").markdown
+    assert "contact at" in o.handle_message(
+        "hotel contact: Anna\n*Sent using* <@U9|Claude>", user_id="U1", thread_key="C:1").markdown
     o.handle_message("editor: Minji", user_id="U1", thread_key="C:1")
 
     o.handle_message("Write a sample draft", user_id="U1", thread_key="C:1")

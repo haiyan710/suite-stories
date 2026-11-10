@@ -689,7 +689,7 @@ class EditorialOrchestrator:
 
     def _style_command(self, user_text: str, user_id: str, project_row: Any) -> str | None:
         """Reply to a house-style or contact command, or None when the message is not one."""
-        text = re.sub(r"<@[^>]+>", "", user_text or "").strip()
+        text = self._plain_command(user_text)
         if (m := self._STYLE_ADD.match(text)):
             rule_id = self._db.add_style_rule(m.group(1), kind="rule", created_by=user_id)
             return f"Added house style rule #{rule_id}. Drafts from now on follow it."
@@ -722,9 +722,15 @@ class EditorialOrchestrator:
         return None
 
     @staticmethod
-    def _amendment_from(request: str) -> str:
+    def _plain_command(text: str) -> str:
+        """Message text without mentions or the "Sent using <app>" footer some Slack apps add."""
+        text = re.sub(r"<@[^>]+>", "", text or "")
+        return re.sub(r"\s*\*?Sent using\*?.*$", "", text, flags=re.S | re.I).strip()
+
+    @classmethod
+    def _amendment_from(cls, request: str) -> str:
         """The correction a draft request carries beyond 'write a sample draft', if any."""
-        text = re.sub(r"<@[^>]+>", "", request or "").strip()
+        text = cls._plain_command(request)
         rest = re.sub(
             r"\b(please\s+)?(write|redo|re-?write|make)\s+(a\s+|the\s+|this\s+)?(sample\s+)?"
             r"(draft|piece|article|layout)(\s+again)?\b[.!:,]?",
