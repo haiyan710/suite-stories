@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
+from ..states import ConceptStatus, ProjectStage, SessionStatus, transition
 from .schema import DEFAULT_STYLE_RULES, SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
@@ -612,11 +613,16 @@ class Database:
         return int(row[0]) if row else None
 
     def update_concept_status(self, concept_id: int, status: str) -> None:
-        valid = {"generated", "shortlisted", "approved", "published", "rejected"}
+        valid = set(ConceptStatus) - {ConceptStatus.TEST}
         if status not in valid:
             raise ValueError(f"invalid concept lifecycle status: {status}")
         with self.transaction() as conn:
-            conn.execute("UPDATE concepts SET status=? WHERE id=? AND status != 'test'", (status, concept_id))
+            row = conn.execute("SELECT status FROM concepts WHERE id=?", (concept_id,)).fetchone()
+            if row is not None:
+                transition("concept", row["status"], status, subject=f"concept {concept_id}")
+            conn.execute(
+                "UPDATE concepts SET status=? WHERE id=? AND status != ?", (str(status), concept_id, ConceptStatus.TEST),
+            )
 
     def project_is_test(self, project_id: int) -> bool:
         """Whether a project already saved a concept from a "[test]" thread."""
@@ -760,6 +766,24 @@ class Database:
         assert session is not None
         return session
 
+    def recover_interrupted(self) -> tuple[int, int]:
+        """On startup nothing is running: free sessions and projects a stopped bot left mid-run.
+
+        A session left RESEARCHING would block nothing but read as busy forever, and a project
+        left RESEARCHING (or never started, RUNNING) is marked INTERRUPTED so a status reply can
+        say to continue. Returns (sessions, projects) changed.
+        """
+        with self.transaction() as conn:
+            sessions = conn.execute(
+                "UPDATE thread_sessions SET status=?, updated_at=datetime('now') WHERE status=?",
+                (SessionStatus.IDLE, SessionStatus.RESEARCHING),
+            ).rowcount
+            projects = conn.execute(
+                "UPDATE projects SET status=?, updated_at=datetime('now') WHERE status IN (?, ?)",
+                (ProjectStage.INTERRUPTED, ProjectStage.RESEARCHING, ProjectStage.RUNNING),
+            ).rowcount
+        return sessions, projects
+
     def clear_pending_question(self, thread_key: str) -> None:
         self.upsert_session(
             thread_key, pending_question_type="", pending_question_text=""
@@ -767,7 +791,7 @@ class Database:
 
     def has_active_session(self, thread_key: str) -> bool:
         session = self.get_session(thread_key)
-        return bool(session and session.status not in {"cancelled"})
+        return bool(session and session.status != SessionStatus.CANCELLED)
 
     def has_bot_participated(self, thread_key: str) -> bool:
         with self._lock:

@@ -24,6 +24,10 @@ from ..storage import ConceptRecord, Database, SessionRecord
 from ..tools.documents import Document
 from ..tools.geo import GeoClient
 from ..tools.web import BRAND, DESTINATION, EDITORIAL_PRESS, PUBLICATION, OFFICIAL
+from ..states import (
+    DRAFTABLE_CONCEPTS, PASSED_CONCEPTS, ConceptStatus, ProjectStage, SessionStatus, Verdict, draft_stage,
+    VersionStatus, next_actions, status_after_critique, transition,
+)
 from .calendar import TripCalendar, parse_trip_calendar
 from .draft_checks import apply_calendar, check_draft
 from .handoffs import (
@@ -459,7 +463,7 @@ class EditorialOrchestrator:
         """Writer drafts a sample article from the concept + outline; the critic QA's it (one revision)."""
         concept_state = dict(state.get("concept") or {})
         concept = concept_state.get("editorial") or {}
-        if not concept or concept_state.get("status") not in {"shortlisted", "approved", "published"}:
+        if not concept or concept_state.get("status") not in DRAFTABLE_CONCEPTS:
             return OrchestratorOutcome(
                 "There's no shortlisted concept in this thread to draft from yet.", project_id=project_id,
             )
@@ -578,7 +582,7 @@ class EditorialOrchestrator:
                 outline=outline, draft=draft.to_dict(),
             ), project_id, step_id=f"critic_draft_{attempt:02d}")
             critique = self._with_draft_checks(critique, draft, calendar, venues)
-            if critique.verdict == "PASS" or not critique.revision_instructions:
+            if critique.verdict == Verdict.PASS or not critique.revision_instructions:
                 break
             qa_revisions = list(critique.revision_instructions)
         fixes: dict[str, Any] = {}
@@ -586,10 +590,10 @@ class EditorialOrchestrator:
             # The last QA round's instructions would otherwise never reach the text; its
             # wording polish is applied too, so the team gets the polished version. A later
             # round runs only for substantive fixes the re-check found, never for polish alone.
-            instructions = list(critique.revision_instructions) if critique.verdict == "PASS_WITH_REVISIONS" else []
+            instructions = list(critique.revision_instructions) if critique.verdict == Verdict.PASS_WITH_REVISIONS else []
             if fix_round > 1 and not instructions:
                 break
-            instructions += list(getattr(critique, "polish", None) or []) if critique.verdict != "FAIL" else []
+            instructions += list(getattr(critique, "polish", None) or []) if critique.verdict != Verdict.FAIL else []
             if not instructions:
                 break
             suffix = "" if fix_round == 1 else f"_{fix_round:02d}"
@@ -612,7 +616,7 @@ class EditorialOrchestrator:
             ), project_id, step_id=f"critic_draft_final{suffix}")
             critique = self._with_draft_checks(critique, draft, calendar, venues)
         polish = list(getattr(critique, "polish", None) or [])
-        if fixes.get("applied") and polish and critique.verdict != "FAIL":
+        if fixes.get("applied") and polish and critique.verdict != Verdict.FAIL:
             # Every re-check finds a little new polish; apply the last one without another
             # check (edits are exact, unique and add no facts) so the loop ends here.
             draft, polished, polish_skipped = self._call(
@@ -671,7 +675,7 @@ class EditorialOrchestrator:
         new = [issue for issue in issues if issue not in (critique.revision_instructions or [])]
         if not new:
             return critique
-        verdict = "PASS_WITH_REVISIONS" if critique.verdict == "PASS" else critique.verdict
+        verdict = Verdict.PASS_WITH_REVISIONS if critique.verdict == Verdict.PASS else critique.verdict
         return replace(critique, verdict=verdict, revision_instructions=[*(critique.revision_instructions or []), *new])
 
     @staticmethod
@@ -965,7 +969,7 @@ class EditorialOrchestrator:
         if polished:
             note += f", then {polished} wording edits"
         qa = [f"**QA by Claude: {verdict}" + (f" ({note})**" if note else "**")]
-        if critique.verdict != "PASS":
+        if critique.verdict != Verdict.PASS:
             qa += [f"• {item}" for item in (critique.revision_instructions or critique.reasons or [])[:3]]
         qa += [f"• Not applied: {item}" for item in ((fixes or {}).get("skipped") or [])[:2]]
         polish = list(getattr(critique, "polish", None) or [])
@@ -1127,11 +1131,21 @@ class EditorialOrchestrator:
                     documents_ack = self._documents_ack(names, before, project_state)
                 elif intent in {Intent.CONTINUE_RESEARCH, Intent.ANSWER_CLARIFICATION}:
                     intent = Intent.FIND_EDITORIAL_OPPORTUNITY
-        if session and session.status == "awaiting_clarification" and intent not in {
-            Intent.CANCEL, Intent.META_QUESTION, Intent.HELP, Intent.GET_PROJECT_STATUS,
-            Intent.SHOW_WORKFLOW,
-        }:
-            intent = Intent.ANSWER_CLARIFICATION
+        if session and session.status == SessionStatus.AWAITING_CLARIFICATION:
+            if self._clarification_is_stale(session):
+                # A question nobody answered for a day must not swallow the next request.
+                session = self._db.upsert_session(
+                    thread_key, status=SessionStatus.IDLE, pending_question_type="", pending_question_text="",
+                )
+            elif intent not in {
+                Intent.CANCEL, Intent.META_QUESTION, Intent.HELP, Intent.GET_PROJECT_STATUS,
+                Intent.SHOW_WORKFLOW,
+            } and not (
+                # An explicit command is not an answer to the question.
+                self._is_sample_draft_request(user_text) or self._is_layout_request(user_text)
+                or hotel_reply or documents
+            ):
+                intent = Intent.ANSWER_CLARIFICATION
         try:
             if documents_ack:
                 outcome = OrchestratorOutcome(documents_ack, project_id=int(project_row["id"]))
@@ -1250,7 +1264,7 @@ class EditorialOrchestrator:
         if intent == Intent.CANCEL:
             if thread_key:
                 self._db.upsert_session(
-                    thread_key, status="cancelled", current_goal="",
+                    thread_key, status=SessionStatus.CANCELLED, current_goal="",
                     pending_question_type="", pending_question_text="",
                 )
             return OrchestratorOutcome("Stopped. I preserved the project state so you can resume later.")
@@ -1259,7 +1273,7 @@ class EditorialOrchestrator:
             return self._answer_direct(user_text, history, project_state, intent)
 
         if intent == Intent.GET_PROJECT_STATUS:
-            return self._project_status(project_state)
+            return self._project_status(project_state, session.status if session else "")
 
         if intent == Intent.SHOW_WORKFLOW:
             return self._workflow_summary(project_state, thread_key)
@@ -1394,7 +1408,7 @@ class EditorialOrchestrator:
         plan = OrchestrationPlan(
             user_goal=user_goal, project_id=str(project_id),
             property_name=str(state.get("project", {}).get("hotel") or "") or None,
-            current_stage=str((state.get("orchestration") or {}).get("current_stage") or "planning"),
+            current_stage=str((state.get("orchestration") or {}).get("current_stage") or ProjectStage.PLANNING),
             desired_outcome=mode.replace("_", " ").title(),
             known_verified=verified[:30],
             known_uncertain=(low_confidence + list(research.get("uncertainties") or []))[:30],
@@ -1732,9 +1746,9 @@ class EditorialOrchestrator:
                 break
         self._db.update_project_state(project_id, "research", research.to_dict())
         if thread_key:
-            self._db.upsert_session(thread_key, status="complete", research_project_id=project_id)
+            self._db.upsert_session(thread_key, status=SessionStatus.COMPLETE, research_project_id=project_id)
         self._finish_plan(
-            project_id, state, stage="research_verified",
+            project_id, state, stage=ProjectStage.RESEARCH_VERIFIED,
             open_questions=[str(item.get("claim", "")) for item in research.verification_claims if item.get("status") == "uncertain"],
         )
         return OrchestratorOutcome(
@@ -1759,7 +1773,7 @@ class EditorialOrchestrator:
             user_goal=user_text, constraints=list(route.get("constraints") or []),
         )
         self._db.upsert_session(
-            thread_key, status="researching", current_property=hotel,
+            thread_key, status=SessionStatus.RESEARCHING, current_property=hotel,
             original_request=user_text, current_goal=str(route.get("goal") or user_text),
             research_project_id=project_id, pending_question_type="", pending_question_text="",
         )
@@ -1801,11 +1815,11 @@ class EditorialOrchestrator:
             reason_code=("CRITICAL_UNKNOWNS" if research.critical_unknowns else "RESEARCH_READY_FOR_GATE"),
         )
         self._record_evaluation(project_id, brief, initial_eval, research.status)
-        self._db.update_project_state(project_id, "research", research.to_dict(), status="researching")
+        self._db.update_project_state(project_id, "research", research.to_dict(), status=ProjectStage.RESEARCHING)
         if research.status == "needs_clarification":
             question = research.recommended_followup_questions[0]
             self._db.upsert_session(
-                thread_key, status="awaiting_clarification",
+                thread_key, status=SessionStatus.AWAITING_CLARIFICATION,
                 pending_question_type="property_identity", pending_question_text=question,
             )
             return OrchestratorOutcome("", clarification=question, project_id=project_id)
@@ -1844,8 +1858,8 @@ class EditorialOrchestrator:
                 break
         gated = self._gated_research(research)
         if not gated.verified_facts and not gated.experience_signals:
-            self._finish_plan(project_id, state, stage="research_blocked", open_questions=research.critical_unknowns or research.uncertainties)
-            self._db.upsert_session(thread_key, status="complete", research_project_id=project_id)
+            self._finish_plan(project_id, state, stage=ProjectStage.RESEARCH_BLOCKED, open_questions=research.critical_unknowns or research.uncertainties)
+            self._db.upsert_session(thread_key, status=SessionStatus.COMPLETE, research_project_id=project_id)
             return OrchestratorOutcome(
                 "I completed the evidence pass, but there is not enough verified evidence to develop a defensible stay experience yet.\n\n"
                 "Still unresolved:\n" + "\n".join(f"• {q}" for q in (research.critical_unknowns or research.uncertainties)[:8]),
@@ -1853,10 +1867,10 @@ class EditorialOrchestrator:
             )
         outcome = self._run_editorial_options(project_id, hotel, research, user_text, {}, approve=False)
         self._db.upsert_session(
-            thread_key, status="complete", research_project_id=project_id,
+            thread_key, status=SessionStatus.COMPLETE, research_project_id=project_id,
             latest_concept_ids=([outcome[1]] if outcome[1] else []),
         )
-        self._finish_plan(project_id, state, stage="concept_ready" if outcome[1] else "research_ready", open_questions=research.critical_unknowns)
+        self._finish_plan(project_id, state, stage=ProjectStage.CONCEPT_READY if outcome[1] else ProjectStage.RESEARCH_READY, open_questions=research.critical_unknowns)
         return OrchestratorOutcome(outcome[0], project_id=project_id)
 
     def _editorial_flow(
@@ -1889,7 +1903,7 @@ class EditorialOrchestrator:
             project_id, hotel, research, feedback, current, approve=approve
         )
         self._finish_plan(
-            project_id, state, stage="concept_ready" if _concept_id else "research_ready",
+            project_id, state, stage=ProjectStage.CONCEPT_READY if _concept_id else "research_ready",
             open_questions=research.critical_unknowns,
         )
         return OrchestratorOutcome(text, project_id=project_id)
@@ -2083,13 +2097,13 @@ class EditorialOrchestrator:
         research: ResearchResult, *, approve: bool,
     ) -> tuple[str, int | None]:
         """Shortlist a candidate the critic passed: state, concept memory, outline reply."""
-        lifecycle = "approved" if approve else "shortlisted"
+        lifecycle = ConceptStatus.APPROVED if approve else ConceptStatus.SHORTLISTED
         concept_state = {
             "status": lifecycle, "version": editorial.version,
             "editorial": editorial.to_dict(), "critic_result": critique.to_dict(),
             "format": self._trip_format(),
         }
-        self._db.update_project_state(project_id, "concept", concept_state, status="concept_ready")
+        self._db.update_project_state(project_id, "concept", concept_state, status=ProjectStage.CONCEPT_READY)
         test_run = self._test_run or self._db.project_is_test(project_id)
         concept_id = self._db.insert_concept(
             project_id=project_id, source_project_id=project_id, hotel=hotel,
@@ -2103,7 +2117,7 @@ class EditorialOrchestrator:
             keywords=list(self._tokens(" ".join((
                 editorial.strongest_experience, editorial.editorial_proposition,
                 editorial.visual_storytelling_device,
-            ))))[:12], status="test" if test_run else lifecycle,
+            ))))[:12], status=ConceptStatus.TEST if test_run else lifecycle,
         )
         note = "\n_Test thread: not saved to concept memory._" if test_run else ""
         logistics: dict[str, Any] = {}
@@ -2173,7 +2187,7 @@ class EditorialOrchestrator:
             )
             text, concept_id = self._run_editorial(project_id, hotel, research, user_goal, {}, approve=approve)
             concept_state = dict(self._db.project_state(project_id).get("concept") or {})
-            if concept_id and concept_state.get("status") in {"shortlisted", "approved"}:
+            if concept_id and concept_state.get("status") in PASSED_CONCEPTS:
                 first_id = first_id or concept_id
                 snapshot = {k: concept_state[k] for k in self.OPTION_KEYS if k in concept_state}
                 snapshot.update(label=label, title=str((concept_state.get("outline") or {}).get("title") or ""))
@@ -2266,7 +2280,7 @@ class EditorialOrchestrator:
         outcome = self._editorial_flow(project_id, state, request, approve=False)
         self._option_note = ""
         fresh = dict(self._db.project_state(project_id).get("concept") or {})
-        if fresh.get("status") in {"shortlisted", "approved"} and fresh.get("editorial") != concept_state.get("editorial"):
+        if fresh.get("status") in PASSED_CONCEPTS and fresh.get("editorial") != concept_state.get("editorial"):
             label = "ABCD"[len(options)] if len(options) < 4 else "D"
             snapshot = {k: fresh[k] for k in self.OPTION_KEYS if k in fresh}
             snapshot.update(label=label, title=str((fresh.get("outline") or {}).get("title") or ""),
@@ -2426,7 +2440,7 @@ class EditorialOrchestrator:
             revisable = None
             central_evidence_gap = bool(self._central_evidence_blockers(critique))
             if self._editorial_has_low_confidence_dependency(editorial, research) or central_evidence_gap:
-                critique.verdict = "FAIL"
+                critique.verdict = Verdict.FAIL
                 critique.fail_reason = "EVIDENCE_DEPENDENCY"
                 gate_reason = (
                     "The critic identified an unverified or contradicted central claim, so the "
@@ -2444,16 +2458,16 @@ class EditorialOrchestrator:
                     evidence_safe=critique.fail_reason != "EVIDENCE_DEPENDENCY",
                     new_questions=list(critique.unresolved_concerns),
                     next_action=("editorial_revision" if (
-                        critique.verdict == "PASS_WITH_REVISIONS"
+                        critique.verdict == Verdict.PASS_WITH_REVISIONS
                         and critique.revision_instructions
                         and attempt < MAX_EDITORIAL_ATTEMPTS
-                    ) else "save_concept" if critique.verdict != "FAIL" else (
+                    ) else "save_concept" if critique.verdict != Verdict.FAIL else (
                         "targeted_research" if critique.fail_reason == "EVIDENCE_DEPENDENCY" else "new_hypothesis"
                     )), reason_code=critique.fail_reason or critique.verdict,
                 ), critique.verdict,
             )
             if (
-                critique.verdict == "PASS_WITH_REVISIONS"
+                critique.verdict == Verdict.PASS_WITH_REVISIONS
                 and critique.revision_instructions
                 and attempt < MAX_EDITORIAL_ATTEMPTS
             ):
@@ -2464,7 +2478,7 @@ class EditorialOrchestrator:
                     + " ".join(str(item) for item in critique.revision_instructions)
                 )
                 continue
-            if critique.verdict != "FAIL":
+            if critique.verdict != Verdict.FAIL:
                 return self._save_candidate(project_id, hotel, editorial, critique, research, approve=approve)
 
             prior_failure = "; ".join(critique.reasons) or critique.fail_reason or "Critic rejected the candidate."
@@ -2495,11 +2509,11 @@ class EditorialOrchestrator:
             return self._save_candidate(project_id, hotel, editorial, critique, research, approve=approve)
         if last_editorial is not None:
             rejected_state = {
-                "status": "rejected", "version": last_editorial.version,
+                "status": ConceptStatus.REJECTED, "version": last_editorial.version,
                 "editorial": last_editorial.to_dict(),
                 "critic_result": last_critique.to_dict() if last_critique else {},
             }
-            self._db.update_project_state(project_id, "concept", rejected_state, status="research_ready")
+            self._db.update_project_state(project_id, "concept", rejected_state, status=ProjectStage.RESEARCH_READY)
         if last_contract_gaps:
             labels = {
                 "strongest_experience": "strongest experience",
@@ -2617,7 +2631,7 @@ class EditorialOrchestrator:
                 reason_code=critique.fail_reason or critique.verdict,
             ), critique.verdict,
         )
-        self._finish_plan(project_id, state, stage="concept_critiqued")
+        self._finish_plan(project_id, state, stage=ProjectStage.CONCEPT_CRITIQUED)
         status_note = self._apply_critique_status(project_id, state, critique)
         summary = self._summarize_critique(critique, concept)
         if summary:
@@ -2630,11 +2644,7 @@ class EditorialOrchestrator:
     @staticmethod
     def _status_after_critique(current: str, verdict: str) -> str | None:
         """Lifecycle change implied by a stand-alone re-critique, or None to keep it."""
-        if verdict == "FAIL":
-            return None if current in {"rejected", "published"} else "rejected"
-        if verdict in {"PASS", "PASS_WITH_REVISIONS"} and current in {"", "generated", "rejected"}:
-            return "shortlisted"
-        return None
+        return status_after_critique(current, verdict)
 
     def _apply_critique_status(self, project_id: int, state: dict[str, Any], critique: Any) -> str:
         """Keep the concept lifecycle (project state + concept memory) in line with the latest critique."""
@@ -2644,7 +2654,9 @@ class EditorialOrchestrator:
         new_status = self._status_after_critique(str(concept_state.get("status") or ""), str(critique.verdict))
         if new_status is None:
             return ""
-        concept_state["status"] = new_status
+        concept_state["status"] = transition(
+            "concept", concept_state.get("status"), new_status, subject=f"project {project_id}",
+        )
         concept_state["critic_result"] = critique.to_dict() if hasattr(critique, "to_dict") else {}
         self._db.update_project_state(project_id, "concept", concept_state)
         concept_id = self._db.latest_concept_id(project_id)
@@ -2705,7 +2717,7 @@ class EditorialOrchestrator:
         concept = concept_state.get("editorial") or {}
         if not concept:
             return OrchestratorOutcome("There is no developed concept to design yet.", project_id=project_id)
-        if concept_state.get("status") not in {"shortlisted", "approved"}:
+        if concept_state.get("status") not in PASSED_CONCEPTS:
             return OrchestratorOutcome(
                 "The current concept has not passed the editorial gate, so I won't start visual direction yet.",
                 project_id=project_id,
@@ -2716,7 +2728,7 @@ class EditorialOrchestrator:
                 user_goal=feedback,
             )
         spec = self._make_design(project_id, state, feedback)
-        self._finish_plan(project_id, state, stage="design_ready")
+        self._finish_plan(project_id, state, stage=ProjectStage.DESIGN_READY)
         return OrchestratorOutcome(
             "Visual direction is ready.\n\n"
             f"Visual grammar: {spec.visual_grammar}\n\n"
@@ -2747,12 +2759,12 @@ class EditorialOrchestrator:
             ), spec.status,
         )
         version = self._db.save_design_version(
-            project_id, spec.to_dict(), status="approved", feedback=feedback
+            project_id, spec.to_dict(), status=VersionStatus.APPROVED, feedback=feedback
         )
         spec.version = version
-        spec.status = "approved"
+        spec.status = VersionStatus.APPROVED
         self._db.update_project_state(project_id, "design", {
-            "status": "approved", "version": version, "spec": spec.to_dict(), "feedback": feedback,
+            "status": VersionStatus.APPROVED, "version": version, "spec": spec.to_dict(), "feedback": feedback,
         }, status="design_ready")
         return spec
 
@@ -2762,7 +2774,7 @@ class EditorialOrchestrator:
         concept = state.get("concept", {}).get("editorial") or {}
         if not concept:
             return OrchestratorOutcome("There is no concept to build yet.", project_id=project_id)
-        if state.get("concept", {}).get("status") not in {"shortlisted", "approved"}:
+        if state.get("concept", {}).get("status") not in PASSED_CONCEPTS:
             return OrchestratorOutcome(
                 "The current concept has not passed the editorial gate, so I won't build it yet.",
                 project_id=project_id,
@@ -2848,11 +2860,11 @@ class EditorialOrchestrator:
                 SpecialistEvaluation(
                     answered_task=True, complete=True, evidence_safe=True,
                     new_questions=list(critique.unresolved_concerns),
-                    next_action=("deliver" if critique.verdict == "PASS" else "revise_design"),
+                    next_action=("deliver" if critique.verdict == Verdict.PASS else "revise_design"),
                     reason_code=critique.verdict,
                 ), critique.verdict,
             )
-            if critique.verdict == "PASS" or cycle >= MAX_VISUAL_REVISION_CYCLES:
+            if critique.verdict == Verdict.PASS or cycle >= MAX_VISUAL_REVISION_CYCLES:
                 break
             revised_state = dict(state)
             revised_state["design"] = {"spec": spec.to_dict()}
@@ -2862,10 +2874,10 @@ class EditorialOrchestrator:
             prior = self._db.current_artifact(project_id)
         assert artifact is not None and critique is not None
         artifact_state = artifact.to_dict() | {
-            "critic_result": critique.to_dict(), "status": "current",
+            "critic_result": critique.to_dict(), "status": VersionStatus.CURRENT,
         }
-        self._db.update_project_state(project_id, "artifact", artifact_state, status="artifact_ready")
-        self._finish_plan(project_id, state, stage="artifact_ready")
+        self._db.update_project_state(project_id, "artifact", artifact_state, status=ProjectStage.ARTIFACT_READY)
+        self._finish_plan(project_id, state, stage=ProjectStage.ARTIFACT_READY)
         changes = "\n".join(f"- {x}" for x in critique.reasons[:4])
         unresolved = "\n".join(f"- {x}" for x in critique.unresolved_concerns[:3])
         message = (
@@ -2960,18 +2972,58 @@ class EditorialOrchestrator:
             project_id=project.get("id"),
         )
 
-    def _project_status(self, state: dict[str, Any]) -> OrchestratorOutcome:
+    CLARIFICATION_TTL_HOURS = 24
+
+    @classmethod
+    def _clarification_is_stale(cls, session: SessionRecord) -> bool:
+        from datetime import datetime, timedelta, timezone
+        try:
+            asked = datetime.strptime(session.updated_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return False
+        return datetime.now(timezone.utc) - asked > timedelta(hours=cls.CLARIFICATION_TTL_HOURS)
+
+    def _project_status(self, state: dict[str, Any], session_status: str = "") -> OrchestratorOutcome:
+        """Where the thread stands and what to say next, from the stored state machines."""
         if not state:
             return OrchestratorOutcome("There is no active project in this thread.")
         project = state.get("project", {})
-        return OrchestratorOutcome(
-            f"Project {project.get('id')}: {project.get('hotel')}\n"
-            f"Research: {state.get('research', {}).get('status', 'not started')}\n"
-            f"Concept: {state.get('concept', {}).get('status', 'not started')}\n"
-            f"Design: {state.get('design', {}).get('status', 'not started')}\n"
-            f"Artifact: v{state.get('artifact', {}).get('version', '—')}",
-            project_id=project.get("id"),
+        research = state.get("research") or {}
+        concept = state.get("concept") or {}
+        lines = [f"*{project.get('hotel')}* (project {project.get('id')}) · stage: {project.get('status') or 'new'}"]
+        facts = len(research.get("verified_facts") or [])
+        photos = sum(1 for a in research.get("available_assets") or [] if isinstance(a, dict) and a.get("rights") == "hotel_supplied")
+        lines.append(
+            f"Research: {research.get('status', 'not started')}"
+            + (f", {facts} facts" if facts else "") + (f", {photos} hotel photos" if photos else "")
         )
+        title = str((concept.get("outline") or {}).get("title") or (concept.get("editorial") or {}).get("working_title") or "")
+        options = concept.get("options") or []
+        lines.append(
+            f"Concept: {concept.get('status', 'not started')}" + (f", {title}" if title else "")
+            + (f" (option {concept.get('active_option')} of {len(options)})" if len(options) > 1 else "")
+        )
+        calendar = TripCalendar.from_dict((concept.get("format") or {}).get("calendar"))
+        if calendar:
+            lines.append(f"Dates: {calendar.days[0].label} to {calendar.days[-1].label} {calendar.days[-1].date[:4]}")
+        stage = draft_stage(concept)
+        draft = concept.get("sample_draft") or {}
+        if draft.get("body"):
+            body = str(draft.get("body") or "")
+            lines.append(
+                f"Draft: {stage.replace('_', ' ')}, {body.count('[TK')} [TK], {body.count('[ASK')} [ASK]"
+            )
+        else:
+            lines.append("Draft: none yet")
+        if state.get("design", {}).get("status") or state.get("artifact", {}).get("version"):
+            lines.append(
+                f"Design: {state.get('design', {}).get('status', 'not started')} · "
+                f"Artifact: v{state.get('artifact', {}).get('version', '—')}"
+            )
+        actions = next_actions(state, session_status)
+        if actions:
+            lines.append("*Next*\n" + "\n".join(f"• {a}" for a in actions))
+        return OrchestratorOutcome("\n".join(lines), project_id=project.get("id"))
 
     def _workflow_summary(self, state: dict[str, Any], thread_key: str) -> OrchestratorOutcome:
         project = state.get("project") or {}
@@ -3066,7 +3118,7 @@ class EditorialOrchestrator:
         question = str(route.get("clarification") or "Which hotel should I research?")
         self._db.upsert_session(
             thread_key, thread_ts=thread_ts or None, channel_id=channel_id or None,
-            user_id=user_id, status="awaiting_clarification",
+            user_id=user_id, status=SessionStatus.AWAITING_CLARIFICATION,
             original_request=user_text, current_goal=str(route.get("goal") or user_text),
             pending_question_type="property_identity", pending_question_text=question,
         )
@@ -3128,8 +3180,8 @@ class EditorialOrchestrator:
                 "experience": c.experience, "proposition": c.proposition,
                 "narrative_device": c.narrative_device, "visual_device": c.visual_device,
                 "source_project_id": c.source_project_id,
-                "signal": "strong" if c.status in {"approved", "published"} else (
-                    "moderate" if c.status == "shortlisted" else "weak"
+                "signal": "strong" if c.status in {ConceptStatus.APPROVED, ConceptStatus.PUBLISHED} else (
+                    "moderate" if c.status == ConceptStatus.SHORTLISTED else "weak"
                 ),
             }
             for c in self._db.recent_concepts(exclude_project_id=project_id, limit=30)
@@ -3327,7 +3379,7 @@ class EditorialOrchestrator:
             text += "\n\nStill to verify:\n" + "\n".join(
                 f"- {clean(q)}" for q in editorial.open_questions
             )
-        if critique.verdict == "PASS_WITH_REVISIONS" and critique.revision_instructions:
+        if critique.verdict == Verdict.PASS_WITH_REVISIONS and critique.revision_instructions:
             text += "\n\nRequired revisions before development:\n" + "\n".join(
                 f"- {clean(item)}" for item in critique.revision_instructions
             )

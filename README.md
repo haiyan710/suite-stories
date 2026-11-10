@@ -181,6 +181,11 @@ and 2 visual revision cycles.
 - **Hotel material stays private.** Hotel-shared documents and photos are
   git-ignored. When they are present, only Claude writes the draft; GLM sees
   public evidence only.
+- **Explicit state machines.** Thread sessions, project stages, the concept
+  lifecycle, critic verdicts, draft stages and versions are enums in one
+  module with their transitions. Restarts free anything left mid-run, a stale
+  question cannot swallow the next request, and "what's the status?" answers
+  with the stage and the next things to say.
 - **Methodology lives in prompts.** Editorial behaviour is in
   `app/prompts/*.md` (22 files). Tune those files before adding code.
 
@@ -194,6 +199,7 @@ app/
   slack_app.py             Slack Bolt Socket Mode: allowlist, threads, worker queue,
                            progress log, missed-message catch-up, socket watchdog
   config.py                Settings / load_settings (the only place env is read)
+  states.py                the state machines: session, project stage, concept, verdict, draft, versions
   formatting.py            Markdown → Slack mrkdwn, message splitting, sources, citations
   orchestration/
     orchestrator.py        the conversational brain: intents, plans, gates, retries, replies
@@ -306,7 +312,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 267 tests run offline with fake LLM providers and fetchers. The live
+The 277 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 ## Limitations

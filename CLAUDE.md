@@ -68,6 +68,21 @@ Request flow: `SlackEventRouter` → `AgentExecutor` (single daemon worker threa
 - **`app/agent.py` (`HotelResearchAgent`) is deprecated** and not the runtime path, but `AgentCancelled`/`AgentError` are still imported from it by the orchestrator and Slack layer, and several tests exercise it. Don't delete it without moving those.
 - `app/slack_dns.py` is a process-local DNS-over-HTTPS fallback used only when the system resolver fails; don't broaden it.
 
+## State machines (`app/states.py`)
+
+Every lifecycle is a `StrEnum` whose values are the strings already stored in SQLite (no migration; comparisons with stored strings still work). Use the enum members, never new string literals.
+
+- `SessionStatus` (`thread_sessions.status`): idle, researching, awaiting_clarification, complete, cancelled. Any move is legal (a new message can pick a thread up from anywhere); the invariants are: RESEARCHING only while a job runs (`Database.recover_interrupted` resets it to idle on every startup), AWAITING_CLARIFICATION only with a pending question, which expires after `CLARIFICATION_TTL_HOURS` (24) and never captures an explicit command (draft/layout request, pasted hotel reply, shared files).
+- `ProjectStage` (`projects.status` and `orchestration_state.current_stage`): planning → researching → research_ready / research_verified / research_blocked → concept_ready / concept_critiqued → design_ready → artifact_ready, plus failed, cancelled, legacy running/completed, and `interrupted` (set on startup for projects left researching or running).
+- `ConceptStatus` (`concept_state.status`, `concepts.status`): generated → shortlisted/approved → published, rejected (revived to shortlisted by a later pass), and `test` (never changes). Moves go through `transition("concept", old, new)`; `status_after_critique` holds the re-critique rules. `DRAFTABLE_CONCEPTS` / `PASSED_CONCEPTS` are the sets the flows test.
+- `Verdict`: PASS, PASS_WITH_REVISIONS, FAIL.
+- `DraftStage`, derived (not stored) by `draft_stage(concept_state)`: none, failed, needs_fixes, passed, laid_out.
+- `VersionStatus` (design versions, artifacts): current, approved, superseded.
+
+`transition()` never raises: an unlisted move is logged and counted in `unexpected_transitions` and still applied, so a Slack reply is never lost mid-run; `tests/test_states.py` runs real flows and asserts the counter stays empty. `next_actions(state, session_status)` turns the machines into the "*Next*" lines of the status reply ("what's the status?"), which also shows the stage, research size and hotel photos, the concept and active option, the trip dates, and the draft stage with its [TK]/[ASK] counts.
+
+Other lifecycles stay local and typed where they live: research result status (complete/partial/needs_clarification), editorial result status (complete/needs_research/no_strong_direction/failed), logistics leg verdicts (ok/tight/not_feasible/unknown), plan step status, and the options set (`concept_state.options` + `active_option`, see Options and combining).
+
 ## Prompts are the methodology
 
 Editorial/creative behaviour lives in `app/prompts/*.md`, loaded by name via `load_prompt` (name→file map in `app/prompts/__init__.py`; adding a prompt requires an entry there). Prefer tuning prompts over adding logic for voice/methodology changes. Key rules encoded there: the unit of ideation is a desirable *experience*; a concept fails if swapping the hotel name keeps ~80% of it; no superlatives/"only hotel"/"minutes away" claims beyond evidence; fewer than three directions (including zero) is a valid outcome.

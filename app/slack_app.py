@@ -29,6 +29,7 @@ from .llm import build_provider
 from .orchestration.orchestrator import STEP_PROGRESS_PREFIX, EditorialOrchestrator
 from .slack_dns import install_slack_socket_dns_fallback
 from .storage import Database
+from .states import SessionStatus
 from .tools.documents import fetch_documents, slim_file
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,7 @@ class AgentExecutor:
         event = self._cancel_events.setdefault(thread_key, threading.Event())
         event.set()
         self._db.upsert_session(
-            thread_key, status="cancelled", current_goal="",
+            thread_key, status=SessionStatus.CANCELLED, current_goal="",
             pending_question_type="", pending_question_text="",
         )
         return thread_key in self._busy_threads
@@ -349,7 +350,7 @@ class SlackEventRouter:
         if mentioned and thread_key and not active_thread:
             self._db.upsert_session(
                 thread_key, thread_ts=thread_ts, channel_id=channel,
-                user_id=user_id, status="idle",
+                user_id=user_id, status=SessionStatus.IDLE,
             )
             active_thread = True
 
@@ -554,6 +555,9 @@ def main() -> None:
         sys.exit(1)
 
     bolt_app, _agent = build_app(settings)
+    recovered = Database(settings.database_path).recover_interrupted()
+    if any(recovered):
+        logger.info("startup: reset %d interrupted thread sessions and %d interrupted projects", *recovered)
     logger.info(
         "hotel-research agent connected (provider %s, model %s)", settings.llm_provider,
         (settings.claude_cli_model or "CLI default") if settings.llm_provider == "claude_cli" else settings.glm_model,
