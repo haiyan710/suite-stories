@@ -499,7 +499,7 @@ class EditorialOrchestrator:
             return OrchestratorOutcome(
                 self._format_draft_with_layout(
                     draft, critique, private=bool(saved.get("private_sources")), photos=self._layout_photo_count,
-                    fixes=saved.get("qa_fixes"),
+                    fixes=saved.get("qa_fixes"), styles=self._layout_styles(request),
                 ),
                 project_id=project_id, attachments=[str(page) for page in pages],
             )
@@ -644,6 +644,7 @@ class EditorialOrchestrator:
                 concept_state["sample_draft"]["layout_html"] = str(pages[0])
                 text = self._format_draft_with_layout(
                     draft, critique, private=private, photos=self._layout_photo_count, fixes=fixes,
+                    styles=self._layout_styles(request),
                 )
             except Exception:
                 logger.exception("layout build failed")
@@ -930,6 +931,7 @@ class EditorialOrchestrator:
     @staticmethod
     def _format_draft_with_layout(
         draft: DraftResult, critique: Any, *, private: bool, photos: int, fixes: dict[str, Any] | None = None,
+        styles: Sequence[str] = ("classic",),
     ) -> str:
         lines = [f"**{draft.headline or 'Sample draft'}**"]
         if draft.standfirst:
@@ -937,13 +939,21 @@ class EditorialOrchestrator:
         qa = EditorialOrchestrator._qa_lines(critique, fixes)
         if draft.tk_items:
             qa.append(f"• {len(draft.tk_items)} [TK] gaps, highlighted in the layout")
+        asks = re.findall(r"\[ASK\b[^\]]*\]", draft.body)
+        if asks:
+            qa.append(f"• {len(asks)} [ASK] notes for the editor, in blue")
         lines.append("\n".join(qa))
         writer = "Claude" if private or "claude" in draft.model.lower() else (draft.model or "GLM")
-        lines.append(
-            f"_Layout below (HTML, {photos} hotel photos, opens in Slack or a browser). "
-            "Open it in a browser to drop photos into the empty slots, then use Save with photos. "
-            f"Drafted by {writer}._"
-        )
+        if list(styles) == ["classic"]:
+            how = "Open it in a browser to drop photos into the empty slots, then use Save with photos. "
+            what = f"Layout below (HTML, {photos} hotel photos, opens in Slack or a browser)"
+        else:
+            names = {"zigzag": "side by side", "image_first": "photo first", "inline": "photos in the text",
+                     "hybrid": "hybrid", "classic": "classic"}
+            what = (f"{len(styles)} layouts below ({', '.join(names.get(x, x) for x in styles)}; "
+                    f"{photos} hotel photos placed, the rest close the page; HTML, opens in a browser)")
+            how = ""
+        lines.append(f"_{what}. {how}Drafted by {writer}._")
         return "\n\n".join(lines)
 
     @staticmethod
