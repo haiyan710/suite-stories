@@ -10,6 +10,10 @@ there. Where the critic restricts a claim (attribute it, soften it, drop
 it), the outline must already obey that restriction: write the safe
 version, not the original.
 
+When FORMAT.calendar is present, it gives each day's real date, weekday and
+holidays: use it for the days in the outline (and drop any different date or
+weekday the concept gives).
+
 Return JSON only:
 
 {"title_options": [], "title": "", "opening_hook": "", "angle": "", "stay_info": "", "why_readers_want_it": [], "outline": [], "proof_points": [], "insider_notes": [], "avoid": [], "check_with_hotel": []}

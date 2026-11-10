@@ -1647,3 +1647,73 @@ def test_humanizer_rewrite_that_admits_added_facts_is_rejected():
                                  "The room is high up and the lift takes you straight there.")
     provider = HumanizeProvider(_json.dumps({"body": body, "added_facts": ["the lift takes you straight there"]}))
     assert WriterAgent(provider).humanize(original) is original
+
+
+def test_a_holiday_request_gives_the_editorial_a_computed_calendar_and_stores_it(tmp_path: Path):
+    from datetime import date
+    o, db, researcher, editorial, *_ = setup_orchestrator(
+        tmp_path, ['{"intent":"RESEARCH_PROPERTY","hotel":"Hotel X"}']
+    )
+    o._today = date(2026, 11, 10)
+    outcome = o.handle_message("Research Hotel X and plan a 4-night stay over Seollal 2027.",
+                               user_id="U1", thread_key="C:trip")
+    instructions = " ".join(editorial.tasks[0].brief.explicit_instructions)
+    assert "CALENDAR" in instructions and "Day 2 · Sunday 7 February 2027 · Seollal" in instructions
+    stored = db.project_state(outcome.project_id)["concept"]["format"]
+    assert stored["nights"] == 4 and stored["calendar"]["start"] == "2027-02-06"
+
+
+class DatedWriter(FakeWriter):
+    def run(self, task):
+        from app.orchestration.handoffs import DraftResult
+        self.tasks.append(task)
+        return DraftResult(
+            status="complete", headline="Garden Evenings", standfirst="We arrive on Friday 5 February.",
+            body="Intro.\n\n## Day 1 · Friday 5 February · Arrival\nDinner [TK: Friday dinner hours].\n\n## Day 2\nSeollal.",
+            model=self.label,
+        )
+
+
+def test_a_corrected_calendar_in_a_draft_request_overrides_the_stored_concept(tmp_path: Path):
+    from datetime import date
+    passed = CritiqueResult(verdict="PASS", reasons=[])
+    o, db, pid, glm, _claude, critic = _draft_setup(tmp_path, [passed, passed, passed, passed])
+    o._today = date(2026, 11, 10)
+    o._writer = glm = DatedWriter("GLM-5.3-Flash")
+    concept = dict(db.project_state(pid)["concept"])
+    concept["format"] = {"type": "itinerary", "nights": 4}
+    db.update_project_state(pid, "concept", concept)
+
+    request = ("Write a sample draft again with the right calendar: Day 1 Sat 6 Feb 2027 (fly in), "
+               "Day 2 Sun 7 Feb (Seollal), Day 5 Wed 10 Feb (fly home).")
+    o.handle_message(request, user_id="U1", thread_key="C:1")
+
+    task = glm.tasks[0]
+    assert task.format["calendar"]["start"] == "2027-02-06"
+    assert task.outline["calendar"][1].startswith("Day 2 · Sunday 7 February 2027")
+    assert task.outline["user_amendments"] == [request]
+    assert critic.tasks[0].outline["user_amendments"] == [request]
+    saved = db.project_state(pid)["concept"]
+    assert saved["format"]["calendar"]["start"] == "2027-02-06" and saved["amendments"] == [request]
+    assert "calendar" not in saved["outline"] and "user_amendments" not in saved["outline"]
+    body = saved["sample_draft"]["body"]
+    # Python fixes the mechanical part...
+    assert "## Day 1 · Saturday 6 February · Arrival" in body and "[TK: Saturday dinner hours]" in body
+    assert "## Day 2 · Sunday 7 February" in body
+    # ...and turns the rest into a revision the critic missed.
+    first_check = critic.tasks[0]
+    assert first_check.draft["body"].startswith("Intro.")
+    assert len(glm.tasks) == 2  # the date check sent the draft back once
+    assert any("outside the trip" in r for r in glm.tasks[1].qa_revisions)
+
+    # A later plain request keeps the stored calendar and amendment.
+    o.handle_message("Write a sample draft", user_id="U1", thread_key="C:1")
+    assert glm.tasks[-1].format["calendar"]["start"] == "2027-02-06"
+    assert glm.tasks[-1].outline["user_amendments"] == [request]
+
+
+def test_amendments_are_only_the_extra_instructions():
+    assert EditorialOrchestrator._amendment_from("Write a sample draft") == ""
+    assert EditorialOrchestrator._amendment_from("<@U1> write a sample draft again.") == ""
+    note = "Write a sample draft. Keep Day 4 inside the city (no day trip)."
+    assert EditorialOrchestrator._amendment_from(note) == note

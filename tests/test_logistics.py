@@ -14,9 +14,13 @@ PLACES = {
     "Museum": Place("Museum", "Museum", "museum", 13.749, 100.528),    # ~2 km
     "Far Restaurant": Place("Far", "Far Restaurant", "restaurant", 13.739, 100.508),
     "Airport": Place("Airport", "Airport", "aerodrome", 13.69, 100.75),
+    "Riverside": Place("Riverside", "Riverside", "restaurant", 13.70, 100.49),
+    "Old Town": Place("Old Town", "Old Town", "sight", 14.35, 100.57),       # ~67 km, another city
+    "Central Station": Place("Central Station", "Central Station", "station", 13.738, 100.517),
     "Elsewhere": Place("Elsewhere", "Elsewhere", "sight", 48.85, 2.35),  # another continent
 }
-ROUTES = {"Airport": Route(30.0, 40, 400), "Park": Route(1.6, 6, 14), "Museum": Route(4.3, 7, 33), "Far Restaurant": Route(8.0, 20, 90)}
+ROUTES = {"Airport": Route(30.0, 40, 400), "Park": Route(1.6, 6, 14), "Museum": Route(4.3, 7, 33), "Far Restaurant": Route(8.0, 20, 90),
+          "Riverside": Route(12.0, 35, 150), "Old Town": Route(70.0, 70, 900)}
 
 
 class FakeGeo:
@@ -57,7 +61,7 @@ def test_short_hop_is_a_walk_and_far_dinner_in_rush_hour_does_not_fit():
     assert park.mode == "walk" and park.walk_min == 14 and park.verdict == "ok"
     dinner = result.legs[2]
     assert dinner.mode == "car" and dinner.traffic == "evening rush hour"
-    assert dinner.drive_min == (45, 80)  # 20 min free flow x 2.0-3.5 + overhead
+    assert dinner.drive_min == (35, 50)  # 20 min free flow x 1.4-2.0 + overhead
     assert dinner.verdict == "not_feasible"
     assert any("does not fit before 17:30" in issue for issue in result.issues)
     assert "Day 2" in result.lines()[0] and "[DOES NOT FIT]" in result.lines()[0]
@@ -73,8 +77,8 @@ def test_unknown_and_far_away_places_are_reported_not_routed():
 
 
 def test_too_much_transit_for_a_slow_traveller_is_flagged():
-    days = [{"day": 3, "stops": [stop("Hotel", "08:00", "hotel"), stop("Far Restaurant", "12:30", "restaurant"),
-                                 stop("Hotel", "17:00", "hotel")]}]  # 35-55 + 45-80 min
+    days = [{"day": 3, "stops": [stop("Hotel", "08:00", "hotel"), stop("Riverside", "12:30", "restaurant"),
+                                 stop("Hotel", "17:00", "hotel")]}]  # 50-65 + 55-80 min
     agent = LogisticsAgent(StopsProvider(days), FakeGeo())
     relaxed = agent.run(LogisticsTask(hotel="Hotel", plan={}))
     couples = agent.run(LogisticsTask(hotel="Hotel", plan={}, segment="couples"))
@@ -110,3 +114,13 @@ def test_walk_time_never_beats_a_holiday_pace(monkeypatch):
     monkeypatch.setattr(client, "_osrm", lambda profile, a, b: answers[profile])
     route = client.route(HOTEL, PLACES["Park"])
     assert route.walk_km == 0.8 and round(route.walk_min) == 10  # 0.75 km at 4.5 km/h, not OSRM's 4 min
+
+
+def test_a_train_day_trip_is_left_to_the_timetable_not_flagged_as_a_long_car_ride():
+    to_train = dict(stop("Old Town", "11:00", "sight"), mode="train")
+    days = [{"day": 4, "stops": [stop("Hotel", "08:00", "hotel"), stop("Central Station", "09:00", "station"),
+                                 to_train, stop("Central Station", "17:00", "station"), stop("Hotel", "18:00", "hotel")]}]
+    result = LogisticsAgent(StopsProvider(days), FakeGeo()).run(LogisticsTask(hotel="Hotel", plan={}))
+    rail = [leg for leg in result.legs if "Old Town" in (leg.origin, leg.destination)]
+    assert len(rail) == 2 and all(leg.verdict == "unknown" and "timetable" in leg.note for leg in rail)
+    assert not any("long ride" in issue or "Old Town" in issue for issue in result.issues)

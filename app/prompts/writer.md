@@ -43,6 +43,15 @@ Hard rules:
 - If the outline has insider notes, end with a "## Insider notes" section of
   short lines starting "Best time:", "Ask for:", "Don't miss:", "Right for:".
 
+Dates and later corrections:
+- FORMAT.calendar (also OUTLINE.calendar) lists each day's real date,
+  weekday and holidays, computed from the request. It overrides any date or
+  weekday in the concept, outline or a previous draft. Day headings carry the
+  date ("## Day 2 · Sunday 7 February · <title>"), and any weekday you write
+  (opening days, "[TK: Sunday hours]") is that day's weekday.
+- OUTLINE.user_amendments are the team's corrections made after the concept
+  was approved. They override the concept and outline wherever they disagree.
+
 If FORMAT is an itinerary ({"type": "itinerary", "nights": N}):
 - Write it as a travel advisor's day-by-day plan that sells the hotel: one
   short intro on why this hotel and who it is right for (with a story or

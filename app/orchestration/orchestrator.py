@@ -23,6 +23,8 @@ from ..storage import ConceptRecord, Database, SessionRecord
 from ..tools.documents import Document
 from ..tools.geo import GeoClient
 from ..tools.web import BRAND, DESTINATION, EDITORIAL_PRESS, PUBLICATION, OFFICIAL
+from .calendar import TripCalendar, parse_trip_calendar
+from .draft_checks import apply_calendar, check_draft
 from .handoffs import (
     ArtifactResult, BuildTask, CritiqueResult, CritiqueTask, DesignSpec, DesignTask, DraftResult, DraftTask,
     EditorialResult, EditorialTask, ResearchResult, ResearchTask,
@@ -107,6 +109,10 @@ class EditorialOrchestrator:
         self._trip_nights = 0
         self._trip_nights_explicit = 0
         self._segment = ""
+        # The trip's real dates, from the request or the stored concept (see calendar.py).
+        self._calendar: TripCalendar | None = None
+        self._calendar_from_request = False
+        self._today = None  # tests pin "today" so relative dates stay stable
         self._dining_note = ""
         self._test_run = False
         self._targeted_research_rounds_used = 0
@@ -171,10 +177,32 @@ class EditorialOrchestrator:
     def _trip_format(self) -> dict[str, Any]:
         if not self._trip_nights:
             return {}
-        piece = {"type": "itinerary", "nights": self._trip_nights}
+        piece: dict[str, Any] = {"type": "itinerary", "nights": self._trip_nights}
         if self._segment:
             piece.update(self._segment_format(self._segment))
+        calendar = self._calendar_for(self._trip_nights)
+        if calendar:
+            piece["calendar"] = calendar.to_dict()
         return piece
+
+    def _calendar_for(self, nights: int) -> TripCalendar | None:
+        """The active calendar, stretched or cut to the piece's length."""
+        if self._calendar is None or not nights:
+            return None
+        return self._calendar if self._calendar.nights == nights else self._calendar.with_nights(nights)
+
+    def _resolve_calendar(self, user_text: str, project_state: dict[str, Any]) -> None:
+        """Dates from this message, else the calendar stored with the thread's concept."""
+        stored_format = (project_state.get("concept") or {}).get("format") or {}
+        nights = self._trip_nights_explicit or int(stored_format.get("nights") or 0) or self._trip_nights
+        parsed = parse_trip_calendar(
+            user_text, nights=nights, nights_explicit=bool(self._trip_nights_explicit), today=self._today,
+        )
+        self._calendar_from_request = parsed is not None
+        self._calendar = parsed or TripCalendar.from_dict(stored_format.get("calendar"))
+        if parsed and parsed.from_range and not self._trip_nights_explicit:
+            # "6 to 10 February" fixes the length as surely as "4 nights".
+            self._trip_nights_explicit = self._trip_nights = parsed.nights
 
     @classmethod
     def _segment_format(cls, segment: str) -> dict[str, str]:
@@ -457,6 +485,20 @@ class EditorialOrchestrator:
             piece_format = {"type": "itinerary", "nights": self._trip_nights_explicit}
         if self._segment and piece_format.get("type") == "itinerary":
             piece_format.update(self._segment_format(self._segment))
+        calendar = (
+            self._calendar_for(int(piece_format.get("nights") or 0))
+            if piece_format.get("type") == "itinerary" else None
+        )
+        if calendar:
+            piece_format["calendar"] = calendar.to_dict()
+            if self._calendar_from_request:
+                # A corrected calendar replaces the stored one for every later step.
+                concept_state["format"] = {**dict(concept_state.get("format") or {}), "calendar": calendar.to_dict()}
+        amendments = list(concept_state.get("amendments") or [])
+        amendment = self._amendment_from(request)
+        if amendment and amendment not in amendments:
+            amendments.append(amendment)
+            concept_state["amendments"] = amendments
         logistics = dict(concept_state.get("logistics") or {})
         if not logistics and piece_format.get("type") == "itinerary":
             # Concepts shortlisted before the check existed, or when it was unavailable.
@@ -472,6 +514,10 @@ class EditorialOrchestrator:
                 **outline, "getting_around": self._getting_around(logistics),
                 "travel_estimates": logistics.get("lines", []), "travel_fixes": logistics.get("issues", []),
             }
+        if calendar:
+            outline = {**outline, "calendar": calendar.lines()}
+        if amendments:
+            outline = {**outline, "user_amendments": amendments}
         draft: DraftResult | None = None
         critique: Any = None
         qa_revisions: list[str] = []
@@ -493,11 +539,12 @@ class EditorialOrchestrator:
                     "humanizer", lambda d: self._humanizer.humanize(d, piece_format=piece_format),
                     draft, project_id, step_id=f"humanizer_{attempt:02d}",
                 )
-            draft = self._pin_headline(draft, outline, qa_revisions)
+            draft = self._calendar_fixed(self._pin_headline(draft, outline, qa_revisions), calendar)
             critique = self._call("critic_draft", self._critic.run, CritiqueTask(
                 project_id=project_id, mode="DRAFT", concept=concept, research=gated.to_dict(),
                 outline=outline, draft=draft.to_dict(),
             ), project_id, step_id=f"critic_draft_{attempt:02d}")
+            critique = self._with_draft_checks(critique, draft, calendar)
             if critique.verdict == "PASS" or not critique.revision_instructions:
                 break
             qa_revisions = list(critique.revision_instructions)
@@ -517,7 +564,7 @@ class EditorialOrchestrator:
                 "draft_fixes", lambda d: self._humanizer.apply_fixes(d, instructions), draft, project_id,
                 step_id=f"draft_fixes{suffix}",
             )
-            draft = self._pin_headline(draft, outline, instructions)
+            draft = self._calendar_fixed(self._pin_headline(draft, outline, instructions), calendar)
             fixes = {
                 "applied": fixes.get("applied", 0) + applied,
                 "total": fixes.get("total", 0) + len(instructions),
@@ -530,6 +577,7 @@ class EditorialOrchestrator:
                 project_id=project_id, mode="DRAFT", concept=concept, research=gated.to_dict(),
                 outline=outline, draft=draft.to_dict(),
             ), project_id, step_id=f"critic_draft_final{suffix}")
+            critique = self._with_draft_checks(critique, draft, calendar)
         polish = list(getattr(critique, "polish", None) or [])
         if fixes.get("applied") and polish and critique.verdict != "FAIL":
             # Every re-check finds a little new polish; apply the last one without another
@@ -538,13 +586,14 @@ class EditorialOrchestrator:
                 "draft_fixes", lambda d: self._humanizer.apply_fixes(d, polish), draft, project_id,
                 step_id="draft_polish",
             )
-            draft = self._pin_headline(draft, outline, polish)
+            draft = self._calendar_fixed(self._pin_headline(draft, outline, polish), calendar)
             if polished:
                 fixes["polished"] = polished
                 critique = replace(critique, polish=list(polish_skipped))
         if outline:
             concept_state["outline"] = {
-                k: v for k, v in outline.items() if k not in {"travel_estimates", "travel_fixes"}
+                k: v for k, v in outline.items()
+                if k not in {"travel_estimates", "travel_fixes", "calendar", "user_amendments"}
             }
         concept_state["sample_draft"] = {
             **draft.to_dict(), "qa": critique.to_dict(), "qa_fixes": fixes, "private_sources": private,
@@ -564,6 +613,37 @@ class EditorialOrchestrator:
                 text += "\n\n_I couldn't build the layout this time; the draft text is above._"
         self._db.update_project_state(project_id, "concept", concept_state)
         return OrchestratorOutcome(text, project_id=project_id, attachments=attachments)
+
+    @staticmethod
+    def _calendar_fixed(draft: DraftResult, calendar: TripCalendar | None) -> DraftResult:
+        """Real dates in the day headings and the right weekday in each day's [TK] notes."""
+        body = apply_calendar(draft.body, calendar)
+        if body == draft.body:
+            return draft
+        return replace(draft, body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body))
+
+    def _with_draft_checks(self, critique: Any, draft: DraftResult, calendar: TripCalendar | None) -> Any:
+        """Add what Python can see (dates, house style, travel times) to the critic's fixes."""
+        issues = check_draft(
+            draft.body, headline=draft.headline, standfirst=draft.standfirst, calendar=calendar,
+            banned_phrases=self._settings.banned_phrases,
+        )
+        new = [issue for issue in issues if issue not in (critique.revision_instructions or [])]
+        if not new:
+            return critique
+        verdict = "PASS_WITH_REVISIONS" if critique.verdict == "PASS" else critique.verdict
+        return replace(critique, verdict=verdict, revision_instructions=[*(critique.revision_instructions or []), *new])
+
+    @staticmethod
+    def _amendment_from(request: str) -> str:
+        """The correction a draft request carries beyond 'write a sample draft', if any."""
+        text = re.sub(r"<@[^>]+>", "", request or "").strip()
+        rest = re.sub(
+            r"\b(please\s+)?(write|redo|re-?write|make)\s+(a\s+|the\s+|this\s+)?(sample\s+)?"
+            r"(draft|piece|article|layout)(\s+again)?\b[.!:,]?",
+            "", text, count=1, flags=re.I,
+        ).strip()
+        return text[:800] if len(rest) >= 25 else ""
 
     @staticmethod
     def _pin_headline(draft: DraftResult, outline: dict[str, Any], qa_revisions: list[str]) -> DraftResult:
@@ -795,6 +875,7 @@ class EditorialOrchestrator:
         self._trip_nights_explicit = self._parse_trip_nights(user_text)
         self._segment = self._parse_segment(user_text)
         self._trip_nights = self._trip_nights_explicit or max(int(self._settings.default_trip_nights or 0), 0)
+        self._resolve_calendar(user_text, project_state)
         intent = str(route.get("intent", Intent.GENERAL_CONVERSATION)).upper()
         if self._is_project_status_question(user_text):
             intent = Intent.GET_PROJECT_STATUS
@@ -1213,6 +1294,9 @@ class EditorialOrchestrator:
         ]
         if self._trip_nights:
             instructions.append(self._itinerary_instruction(self._trip_nights, self._segment))
+            calendar = self._calendar_for(self._trip_nights)
+            if calendar:
+                instructions.append(calendar.instruction())
         if self._dining_note:
             instructions.append(self._dining_note)
         if attempt > 1 and "critic required revisions" in prior_failure.lower():
@@ -1254,6 +1338,9 @@ class EditorialOrchestrator:
                 f" FORMAT: hotel recommendation with a {self._trip_nights}-night itinerary"
                 + (f" for {self.TRAVELLER_SEGMENTS[self._segment][0]}." if self._segment else ".")
                 if self._trip_nights and mode == "EDITORIAL" else ""
+            ) + (
+                " " + calendar.instruction()
+                if mode == "EDITORIAL" and (calendar := self._calendar_for(self._trip_nights)) else ""
             ),
             explicit_instructions=["Test factual support, actual guest experience, booking desire, property specificity, originality, natural editorial device, and asset feasibility."],
             prohibited_actions=["Do not browse.", "Do not silently repair the proposition."],

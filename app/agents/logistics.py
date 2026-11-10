@@ -25,13 +25,18 @@ logger = logging.getLogger(__name__)
 SOURCE_NOTE = "Estimates from OpenStreetMap routing (no live traffic data), with a time-of-day traffic allowance."
 
 # OSRM times are free-flow. (low, high) multipliers by arrival time; no city data, so broad
-# bands with a high end sized for big congested cities: an itinerary should over- not under-estimate.
+# bands that lean high. The first bands (2.0-3.5x) turned an airport transfer of about
+# an hour into "110-195 minutes"; these keep a margin without inventing gridlock.
 TRAFFIC_BANDS = (
-    ((7 * 60, 9 * 60 + 30), (2.0, 3.5), "morning rush hour"),
-    ((16 * 60 + 30, 19 * 60 + 30), (2.0, 3.5), "evening rush hour"),
-    ((9 * 60 + 30, 16 * 60 + 30), (1.4, 2.2), "daytime traffic"),
+    ((7 * 60, 9 * 60 + 30), (1.4, 2.0), "morning rush hour"),
+    ((16 * 60 + 30, 19 * 60 + 30), (1.4, 2.0), "evening rush hour"),
+    ((9 * 60 + 30, 16 * 60 + 30), (1.2, 1.6), "daytime traffic"),
 )
-OFF_PEAK = ((1.1, 1.5), "light traffic")
+OFF_PEAK = ((1.0, 1.3), "light traffic")
+# Farther than this from a station (or by a mode the plan names), a leg is a rail or boat
+# trip: road times say nothing about it, so it is listed as unchecked instead of "long".
+INTERCITY_KM = 30
+RAIL_MODES = {"train", "rail", "boat", "ferry"}
 # Getting a car to the door, parking, finding the entrance.
 CAR_OVERHEAD_MIN = (5, 10)
 WALK_MAX_MIN = 15
@@ -234,6 +239,13 @@ class LogisticsAgent:
             return Leg(day, la, lb, arrive=arrive, verdict="unknown", note="place not found on the map")
         if haversine_km(pa, pb) < 0.15:
             return None
+        planned = str(b.get("mode") or "").lower()
+        kinds = {str(a.get("kind")), str(b.get("kind"))}
+        if haversine_km(pa, pb) > INTERCITY_KM and (planned in RAIL_MODES or "station" in kinds):
+            return Leg(
+                day, la, lb, arrive=arrive, distance_km=round(haversine_km(pa, pb), 1), mode=planned or "train",
+                verdict="unknown", note="a train or boat trip: use the timetable, road times do not apply",
+            )
         route = self._geo.route(pa, pb)
         if route is None:
             return Leg(day, la, lb, arrive=arrive, verdict="unknown", note="no route found")
@@ -245,7 +257,6 @@ class LogisticsAgent:
         )
         walk = int(round(route.walk_min)) if route.walk_min != float("inf") else 999
         mode = "walk" if walk <= WALK_MAX_MIN else "car"
-        planned = str(b.get("mode") or "").lower()
         note = ""
         if planned in {"train", "metro", "subway", "skytrain", "boat", "ferry"}:
             note = f"plan says {planned}; rail and boat times are not checked"

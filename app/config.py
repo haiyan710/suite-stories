@@ -51,6 +51,8 @@ class Settings:
     # day-by-day itinerary, when a request names none. 0 = one stay experience instead.
     # load_settings defaults it to 3; 0 here keeps hand-built Settings (tests) on one experience.
     default_trip_nights: int = 0
+    # House-style phrases a draft must not contain (deterministic check before the critic).
+    banned_phrases: tuple[str, ...] = ()
     # Research guest reviews, insider tips and the hotel's stories before editorial.
     # load_settings turns it on; off here keeps hand-built Settings (tests) on the old path.
     experience_research: bool = False
@@ -133,6 +135,7 @@ def load_settings(
         claude_cli_research_model=env.get("CLAUDE_CLI_RESEARCH_MODEL", "claude-sonnet-5-5").strip(),
         catchup_hours=float(env.get("CATCHUP_HOURS", "48") or 0),
         default_trip_nights=int(env.get("DEFAULT_TRIP_NIGHTS", "3") or 0),
+        banned_phrases=tuple(x.strip() for x in env.get("BANNED_PHRASES", "").split("|") if x.strip()),
         experience_research=env.get("EXPERIENCE_RESEARCH", "1").strip().lower() not in {"0", "false", "no", ""},
         humanize_drafts=env.get("HUMANIZE_DRAFTS", "1").strip().lower() not in {"0", "false", "no", ""},
         logistics_check=env.get("LOGISTICS_CHECK", "1").strip().lower() not in {"0", "false", "no", ""},
