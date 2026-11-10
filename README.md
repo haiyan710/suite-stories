@@ -2,8 +2,8 @@
 
 A Slack copilot that turns "research this hotel and write about it" into a
 finished promotional editorial: a verified evidence package, the case for
-booking the hotel, a day-by-day itinerary, a sample article and a
-magazine-style HTML layout ready for photos.
+booking the hotel, a day-by-day itinerary on real dates, a sample article and
+magazine-style HTML layouts built with the hotel's own photos.
 
 It is built for a small content team that writes for luxury travellers who
 compare their options closely and book when they can see why a hotel fits the trip.
@@ -32,13 +32,22 @@ the bot posts its progress as a log in the Slack thread and ends with:
    standfirst, a Day 1 info line (check-in, room to book, area), timed moments
    for each day, `Insider notes` and `Before you go`. Missing details are
    marked `[TK: …]` instead of being invented.
-3. **An HTML layout** (on request): one self-contained magazine page built
-   from the draft. Photos the hotel supplied are placed automatically. Every
-   other section gets an empty slot with a shot brief, and the editor can drop
-   images in and save the page.
+3. **HTML layouts** (on request): self-contained magazine pages built from
+   the draft in one of five styles: classic, side by side (photo and text
+   alternating), photo first (full-width chapter photos), photos inside the
+   text, or a hybrid of the last two. Photos the hotel shared in Slack (PDF
+   decks or plain JPG/PNG/TIFF files) are captioned and placed automatically;
+   photos of spaces closed on the trip dates close the page as a "when you
+   come back" strip.
+4. **Options** (on request): "give me 3 options" returns clearly different
+   angles (A, B, C) in one thread; the team can switch between them, draft
+   any of them, or combine two ("B's structure with C's voice").
 
 Each step is checked by a critic before the team sees it, and every fact in
-the output can be traced to a stored source.
+the output can be traced to a stored source. The copy itself reads as direct
+recommendations: sources stay in the database, not in the text. Where only the
+hotel can answer (a dish from the winter menu, a group table), the draft
+carries an `[ASK <contact>: …]` note for the editor.
 
 ### Example output
 
@@ -75,8 +84,22 @@ task brief from the orchestrator for each call.
 
 Smaller single-call steps run on the fast model and are not separate agents:
 reply routing, outline condensation (`outline.md`), dinner picks from the
-evidence (`dining_picks.md`), critique summaries, stop extraction for
-logistics, and photo placement for layouts (`layout_images.md`).
+evidence (`dining_picks.md`), stop notes (`venue_notes.md`: why each place is
+worth the visit, closed days, a dish, which hotel spaces are open on the trip
+dates), critique summaries, stop extraction for logistics, and photo placement
+for layouts (`layout_images.md`).
+
+Two steps are plain Python, with no model at all:
+
+- **Trip calendar** (`orchestration/calendar.py`): dates and weekdays come
+  from the request ("6-10 Feb 2027") or a Korean holiday and year ("Seollal
+  2027", with substitute holidays). Every agent gets the same calendar, and it
+  overrides any date a model wrote earlier.
+- **Draft checks** (`orchestration/draft_checks.py`): before and after each
+  critic pass, the day headings get their real dates, `[TK]` notes get the
+  right weekday, and wrong dates, banned phrases, a stop on its closed day, a
+  closed hotel space written into the stay, or an implausible car time become
+  revision instructions.
 
 ### Flow
 
@@ -91,17 +114,18 @@ SlackEventRouter ──► AgentExecutor (worker thread, progress log, cancellat
    │ research            │ concept                     │ draft             │
    ▼                     ▼                             ▼                   │
 ResearchAgent ──► evidence gate ──► EditorialAgent ──► CriticAgent        │
+ trip calendar ─────────────────────────┘ (dates for every agent)          │
  (official, press,   (only verified   (booking case +   (EDITORIAL)        │
   guest reviews,      facts reach      itinerary)          │               │
   venue research)     editorial)            ▲   retry ◄────┘               │
                                             │                              │
-                                   LogisticsAgent ──► outline ──► Slack    │
+                         LogisticsAgent + stop notes ──► outline ──► Slack │
                                                                            │
-   WriterAgent ──► humanize ──► CriticAgent (DRAFT) ──► revise (1 round) ◄─┘
+   WriterAgent ──► humanize ──► draft checks + CriticAgent (DRAFT) ──► revise ◄┘
         │                              │
         └── apply_fixes ◄──────────────┘ final fixes + re-check (max 2), then polish
                 │
-          layout (HTML) ──► Slack file upload
+          layouts (HTML, 1-4 styles) ──► Slack file upload
                          │
                   SQLite: projects, sources, fact cache, concepts,
                   versions, workflow trace, Slack event dedup
@@ -126,9 +150,19 @@ and 2 visual revision cycles.
 - **The experience is the unit of ideation.** A concept fails if swapping in
   another hotel's name keeps about 80% of it. Superlatives, "only hotel" and
   "minutes away" claims need evidence.
-- **Promotional, not a review.** Drawbacks appear only as helpful tips. Guest
-  reports are attributed and never name anyone. Booking-platform perks are
-  never presented as the hotel's own offers.
+- **Promotional, not a review.** Drawbacks appear only as helpful tips.
+  Booking-platform perks are never presented as the hotel's own offers.
+- **Recommendations, not citations.** The copy never names its sources ("one
+  reviewer", "per the hotel", a publication): claims read as direct advice,
+  and the writer's claim-to-source map stays with the editor. Guest reports
+  give texture and tips, never name anyone, and never alone support an hour,
+  a price or the booking case.
+- **House style the team can edit.** Rules and banned phrases live in the
+  database and are changed from Slack (`style rule: …`, `banned phrase: …`);
+  the writer, the critics and the draft checks all read them.
+- **Dates are computed, not written.** A model once put a holiday on the wrong
+  weekday and every later step copied it; dates now come from Python, and a
+  correction in the thread overrides the stored concept.
 - **Plain, translatable English.** Drafts are written to be translated, so the
   writer and humanizer avoid idioms. The humanizer removes AI-writing tells
   (patterns adapted from blader/humanizer and mikiarlo3/ai-copywriter) and
@@ -136,7 +170,9 @@ and 2 visual revision cycles.
 - **Traveller segments.** Couples, families, slow travel, wellness, design and
   culture, golf and food-led trips each set the activities to favour, a
   transit limit and the voice (about 60% information, 40% the traveller's
-  voice).
+  voice). A request for several types, or for every reader, becomes a mixed
+  party: shared meals, and days that split give each group its own line, with
+  the slower option for grandparents.
 - **Memory against repetition.** Shortlisted concepts are stored and fed back
   to the editorial agent and the critic, so new pieces do not reuse old angles.
   Test threads (`[test]`) are kept out of this memory.
@@ -146,7 +182,7 @@ and 2 visual revision cycles.
   git-ignored. When they are present, only Claude writes the draft; GLM sees
   public evidence only.
 - **Methodology lives in prompts.** Editorial behaviour is in
-  `app/prompts/*.md` (21 files). Tune those files before adding code.
+  `app/prompts/*.md` (22 files). Tune those files before adding code.
 
 ---
 
@@ -164,6 +200,8 @@ app/
     intents.py             Intent vocabulary
     handoffs.py            typed task/result dataclasses between agents
     planning.py            plans, task briefs, evidence confidence, research compaction
+    calendar.py            trip dates, weekdays and Korean holidays, computed in Python
+    draft_checks.py        deterministic draft fixes and checks (dates, house style, closures)
     golden.py              non-leaking quality evaluator for the golden test
   agents/                  the seven specialists (see table above) + base protocol
   llm/
@@ -175,12 +213,13 @@ app/
   tools/
     web.py                 search, source typing, guide/press discovery
     pages.py               fetch, URL normalisation, HTML → evidence text
-    documents.py           Slack file download, PDF text, photo extraction and captions
+    documents.py           Slack file download, PDF text, photo files and PDF photos, captions
     geo.py                 Photon geocoding + OSRM routing, cached
     assets.py              image inventory
   artifacts/
     manager.py             append-only versioned mockups (vNNN), restore by pointer
-    layout.py              magazine-style HTML layout with photo slots
+    layout.py              classic magazine layout with photo slots
+    layout_styles.py       side-by-side, photo-first, inline and hybrid layouts
   storage/
     schema.py, db.py       SQLite schema (in-place migrations) and data access
   prompts/                 methodology, one markdown file per role or step
@@ -206,7 +245,7 @@ cp .env.example .env      # fill in the Slack tokens and allowed user ids
 **Slack app**: create an app with Socket Mode on (app token with
 `connections:write`). Bot scopes: `app_mentions:read`, `chat:write`,
 `im:history`, `reactions:write`, `channels:history`, `groups:history`,
-`files:read` (shared PDFs) and `files:write` (layout upload). Events:
+`files:read` (shared PDFs and photos) and `files:write` (layout upload). Events:
 `app_mention`, `message.im`, `message.channels`, `message.groups`. Invite the
 bot to the channel. A thread starts with an @mention; after that, allowlisted
 users can reply without mentioning it.
@@ -248,10 +287,16 @@ Restart it after a code change with
 ```
 @bot research <hotel> for a honeymoon couple        → outline + Getting around
 @bot research <hotel>, 4-night trip for a family    → itinerary of that length
+@bot research <hotel>, 4 nights over Seollal 2027,
+     for all traveller groups, 3 options            → options A-C on real dates, mixed party
+use option B / combine B and C: <what from each>    → switch or merge options
 write a sample draft                                → draft with QA verdict
-make the layout                                     → HTML layout file in the thread
-<attach the hotel's PDF deck>                       → facts and photos added as hotel evidence
+write a sample draft. <correction>                  → the correction overrides the stored concept
+make the layout / side by side / all four layouts   → HTML layout files in the thread
+<attach the hotel's PDF deck or photo files>        → facts and photos added as hotel evidence
 Hotel confirmed: <pasted reply>                     → confirms open claims and re-runs editorial
+style rules / style rule: … / banned phrase: a | b  → house style, used by every draft
+hotel contact: <name> / editor: <name>              → who the [ASK] notes are for
 critique this / show workflow / use v1 again
 ```
 
@@ -261,7 +306,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 236 tests run offline with fake LLM providers and fetchers. The live
+The 267 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 ## Limitations
@@ -269,9 +314,10 @@ scripts in `scripts/` use the network and cost tokens.
 - Many hotel chain sites block automated fetchers or render with JavaScript
   only. The researcher falls back to press and guides and does not bypass bot
   protection.
-- Travel times are free-flow routing plus traffic multipliers. There are no
-  rail or boat times and no opening hours, and the output always writes them
-  as "about".
+- Travel times are free-flow routing plus traffic multipliers, always written
+  as "about". Train and boat legs are left to the timetable, and opening days
+  come from the evidence (stop notes), not from a live opening-hours source.
+- Korean holiday dates are a table that must be extended each year.
 - Web images are not rights-cleared, so layouts use only hotel-supplied
   photos.
 - The bot runs on one machine and works only while that machine is awake.
