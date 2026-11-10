@@ -1871,3 +1871,48 @@ def test_photos_of_spaces_closed_on_the_trip_go_to_the_closing_strip():
     state = {"concept": {"venues": {"hotel_spaces": [
         {"name": "WET Deck", "open_on_trip": "no"}, {"name": "Giano", "open_on_trip": "yes"}]}}}
     assert EditorialOrchestrator._closed_space_photos(catalogue, state) == ["img1"]
+
+
+def _option_editorial(title: str) -> EditorialResult:
+    return EditorialResult(
+        status="complete", strongest_experience=f"{title} experience in one calm hotel.",
+        why_someone_would_want_it="The trip changes without daily repacking.",
+        why_this_property_enables_it="Verified access and room evidence support it.",
+        editorial_proposition=f"{title} proposition", possible_story_structure=f"{title} structure",
+        visual_storytelling_device="repeat the same room frame", working_title=title, version=1,
+    )
+
+
+def test_option_counts_are_read_from_the_request():
+    parse = EditorialOrchestrator._parse_option_count
+    assert parse("Research Hotel X and give me 3 options") == 3
+    assert parse("three different angles please") == 3
+    assert parse("Tạo 3 bản để chọn") == 3
+    assert parse("Research Hotel X") == 1 and parse("a 4-night stay") == 1 and parse("xem bản đồ") == 1
+
+
+def test_three_options_are_kept_distinct_and_can_be_selected_and_combined(tmp_path: Path):
+    o, db, researcher, editorial, _d, _b, critic = setup_orchestrator(
+        tmp_path, ['{"intent":"RESEARCH_PROPERTY","hotel":"Hotel X"}'] * 3,
+        editorial_results=[_option_editorial(t) for t in ("Alpha", "Beta", "Gamma", "Delta")],
+    )
+    outcome = o.handle_message("Research Hotel X and give me 3 options", user_id="U1", thread_key="C:opt")
+    pid = outcome.project_id
+    assert "*Option A*" in outcome.markdown and "*Option C*" in outcome.markdown
+    notes = [" ".join(t.brief.explicit_instructions) for t in editorial.tasks]
+    assert "option B of 3" in notes[1] and "Alpha" in notes[1] and "Beta" in notes[2]
+    concept = db.project_state(pid)["concept"]
+    assert [x["label"] for x in concept["options"]] == ["A", "B", "C"]
+    assert concept["active_option"] == "A" and concept["editorial"]["working_title"] == "Alpha"
+
+    reply = o.handle_message("use option B", user_id="U1", thread_key="C:opt")
+    assert "Option B is now active" in reply.markdown
+    assert db.project_state(pid)["concept"]["editorial"]["working_title"] == "Beta"
+
+    combined = o.handle_message("combine A and C: A's structure with C's voice", user_id="U1", thread_key="C:opt")
+    assert "*Option D* (combining A, C)" in combined.markdown
+    note = " ".join(editorial.tasks[-1].brief.explicit_instructions)
+    assert "COMBINE" in note and "Alpha proposition" in note and "Gamma proposition" in note
+    concept = db.project_state(pid)["concept"]
+    assert concept["active_option"] == "D" and concept["editorial"]["working_title"] == "Delta"
+    assert [x["label"] for x in concept["options"]] == ["A", "B", "C", "D"]

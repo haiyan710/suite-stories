@@ -114,6 +114,9 @@ class EditorialOrchestrator:
         self._calendar: TripCalendar | None = None
         self._calendar_from_request = False
         self._today = None  # tests pin "today" so relative dates stay stable
+        # "3 options": how many distinct concepts this request wants, and the note that keeps them apart.
+        self._option_count = 1
+        self._option_note = ""
         self._dining_note = ""
         self._test_run = False
         self._targeted_research_rounds_used = 0
@@ -1059,14 +1062,24 @@ class EditorialOrchestrator:
             )
         project_row = self._db.project_for_thread(thread_key) if thread_key else None
         project_state = self._db.project_state(project_row["id"]) if project_row else {}
-        style_reply = self._style_command(user_text, user_id, project_row)
-        if style_reply is not None:
-            return OrchestratorOutcome(style_reply, project_id=project_row["id"] if project_row else None)
-        route = self._classify(user_text, history, session, project_state)
+        # Request shape (length, traveller, dates, options), read before any command or route.
         self._trip_nights_explicit = self._parse_trip_nights(user_text)
         self._segment = self._parse_segment(user_text)
         self._trip_nights = self._trip_nights_explicit or max(int(self._settings.default_trip_nights or 0), 0)
         self._resolve_calendar(user_text, project_state)
+        self._option_count = self._parse_option_count(user_text)
+        self._option_note = ""
+        style_reply = self._style_command(user_text, user_id, project_row)
+        if style_reply is not None:
+            return OrchestratorOutcome(style_reply, project_id=project_row["id"] if project_row else None)
+        if project_row and (project_state.get("concept") or {}).get("options"):
+            option_outcome = self._option_command(user_text, int(project_row["id"]), project_state)
+            if isinstance(option_outcome, OrchestratorOutcome):
+                return option_outcome
+            if option_outcome:  # an option was selected and the request goes on (e.g. a draft)
+                project_state = self._db.project_state(project_row["id"])
+                self._resolve_calendar(user_text, project_state)
+        route = self._classify(user_text, history, session, project_state)
         intent = str(route.get("intent", Intent.GENERAL_CONVERSATION)).upper()
         if self._is_project_status_question(user_text):
             intent = Intent.GET_PROJECT_STATUS
@@ -1496,6 +1509,8 @@ class EditorialOrchestrator:
             )
         if self._dining_note:
             instructions.append(self._dining_note)
+        if self._option_note:
+            instructions.append(self._option_note)
         if attempt > 1 and "critic required revisions" in prior_failure.lower():
             instructions.append(
                 "Revise the supplied candidate in place. Apply every critic instruction, remove or "
@@ -1820,7 +1835,7 @@ class EditorialOrchestrator:
                 "Still unresolved:\n" + "\n".join(f"• {q}" for q in (research.critical_unknowns or research.uncertainties)[:8]),
                 project_id=project_id,
             )
-        outcome = self._run_editorial(project_id, hotel, research, user_text, {}, approve=False)
+        outcome = self._run_editorial_options(project_id, hotel, research, user_text, {}, approve=False)
         self._db.upsert_session(
             thread_key, status="complete", research_project_id=project_id,
             latest_concept_ids=([outcome[1]] if outcome[1] else []),
@@ -1854,7 +1869,7 @@ class EditorialOrchestrator:
                 intent=(Intent.DEVELOP_CONCEPT if approve else Intent.FIND_EDITORIAL_OPPORTUNITY),
                 user_goal=feedback,
             )
-        text, _concept_id = self._run_editorial(
+        text, _concept_id = self._run_editorial_options(
             project_id, hotel, research, feedback, current, approve=approve
         )
         self._finish_plan(
@@ -2098,6 +2113,156 @@ class EditorialOrchestrator:
                 outline, editorial, critique, lifecycle, research, itinerary=bool(self._trip_nights),
             ) + note, concept_id
         return self._format_editorial(editorial, critique, lifecycle, research) + note, concept_id
+
+    # ---- several options, choosing one, combining them --------------------------------------
+    OPTION_KEYS = (
+        "status", "version", "editorial", "critic_result", "format", "outline", "logistics", "venues",
+        "sample_draft", "amendments",
+    )
+    _NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "hai": 2, "ba": 3, "bốn": 4}
+
+    @classmethod
+    def _parse_option_count(cls, text: str) -> int:
+        """'3 options', 'three versions', '3 phương án', 'tạo 3 bản' -> 3 (2-4), else 1."""
+        m = re.search(
+            r"\b(\d|two|three|four|hai|ba|bốn)\s+(?:different\s+|distinct\s+)?"
+            r"(?:options|versions|angles|concepts|directions|phương án|hướng|bản(?!\s+đồ))",
+            text.lower(),
+        )
+        if not m:
+            return 1
+        value = int(m.group(1)) if m.group(1).isdigit() else cls._NUMBER_WORDS[m.group(1)]
+        return value if 2 <= value <= 4 else 1
+
+    def _run_editorial_options(
+        self, project_id: int, hotel: str, research: ResearchResult, user_goal: str,
+        current_concept: dict[str, Any], *, approve: bool,
+    ) -> tuple[str, int | None]:
+        """One concept, or N clearly different ones kept as options A, B, C (A stays active)."""
+        if self._option_count <= 1:
+            return self._run_editorial(project_id, hotel, research, user_goal, current_concept, approve=approve)
+        options: list[dict[str, Any]] = []
+        texts: list[str] = []
+        first_id: int | None = None
+        for index in range(self._option_count):
+            label = "ABCD"[index]
+            earlier = "; ".join(
+                f"{o['label']}: {o.get('title') or o['editorial'].get('editorial_proposition', '')}" for o in options
+            )
+            self._option_note = (
+                f"OPTIONS: this is option {label} of {self._option_count} for the same request. "
+                + (f"Take an angle clearly different from the earlier options ({earlier}): a different "
+                   "spine, structure or reader promise, not a rename." if options else
+                   "Later options will take other angles, so commit to one clear angle.")
+            )
+            text, concept_id = self._run_editorial(project_id, hotel, research, user_goal, {}, approve=approve)
+            concept_state = dict(self._db.project_state(project_id).get("concept") or {})
+            if concept_id and concept_state.get("status") in {"shortlisted", "approved"}:
+                first_id = first_id or concept_id
+                snapshot = {k: concept_state[k] for k in self.OPTION_KEYS if k in concept_state}
+                snapshot.update(label=label, title=str((concept_state.get("outline") or {}).get("title") or ""))
+                options.append(snapshot)
+                texts.append(f"*Option {label}*\n\n{text}")
+            else:
+                texts.append(f"*Option {label}*: no candidate passed this time.\n\n{text}")
+        self._option_note = ""
+        if options:
+            active = {k: v for k, v in options[0].items() if k in self.OPTION_KEYS}
+            self._db.update_project_state(project_id, "concept", {
+                **active, "options": options, "active_option": options[0]["label"],
+            })
+        labels = ", ".join(o["label"] for o in options)
+        texts.append(
+            f"_Options {labels} are saved in this thread; A is active. Say \"use option B\", \"write a sample "
+            "draft for option C\" or \"combine B and C: …\" (what to take from each)._"
+            if len(options) > 1 else ""
+        )
+        return "\n\n---\n\n".join(t for t in texts if t), first_id
+
+    _OPTION_PICK = re.compile(r"\b(?:use|choose|pick|select|go with|for|dùng|chọn)\s+(?:option|phương án|bản)\s+([A-D])\b", re.I)
+    _OPTION_COMBINE = re.compile(
+        r"\b(?:combine|merge|blend|gộp|kết hợp)\b.*?\b([A-D])\b(?:\s*(?:,|and|với|và|&|\+)\s*([A-D])\b)+", re.I | re.S,
+    )
+
+    def _select_option(self, project_id: int, concept_state: dict[str, Any], label: str) -> bool:
+        options = list(concept_state.get("options") or [])
+        target = next((o for o in options if o.get("label") == label.upper()), None)
+        if target is None:
+            return False
+        current = concept_state.get("active_option")
+        for option in options:  # keep the active option's draft and amendments with it
+            if option.get("label") == current:
+                option.update({k: concept_state[k] for k in self.OPTION_KEYS if k in concept_state})
+        fresh = {k: v for k, v in target.items() if k in self.OPTION_KEYS}
+        self._db.update_project_state(project_id, "concept", {
+            **fresh, "options": options, "active_option": target["label"],
+        })
+        return True
+
+    def _option_command(
+        self, user_text: str, project_id: int, project_state: dict[str, Any],
+    ) -> OrchestratorOutcome | bool | None:
+        """Select or combine saved options. True: selected, carry on with the request."""
+        text = self._plain_command(user_text)
+        concept_state = dict(project_state.get("concept") or {})
+        if (m := self._OPTION_COMBINE.search(text)):
+            labels = [l.upper() for l in re.findall(r"\b([A-Da-d])\b", m.group(0))]
+            return self._combine_options(project_id, project_state, list(dict.fromkeys(labels)), text)
+        if (m := self._OPTION_PICK.search(text)):
+            if not self._select_option(project_id, concept_state, m.group(1)):
+                return OrchestratorOutcome(f"There is no option {m.group(1).upper()} in this thread.", project_id=project_id)
+            if self._is_sample_draft_request(text) or self._is_layout_request(text):
+                return True
+            option = next(o for o in concept_state["options"] if o["label"] == m.group(1).upper())
+            return OrchestratorOutcome(
+                f"Option {option['label']} is now active: *{option.get('title') or 'untitled'}*. "
+                "Say \"write a sample draft\" to draft it.", project_id=project_id,
+            )
+        return None
+
+    def _combine_options(
+        self, project_id: int, state: dict[str, Any], labels: list[str], request: str,
+    ) -> OrchestratorOutcome:
+        concept_state = dict(state.get("concept") or {})
+        options = list(concept_state.get("options") or [])
+        chosen = [o for o in options if o.get("label") in labels]
+        if len(chosen) < 2:
+            return OrchestratorOutcome("Name at least two saved options to combine (e.g. \"combine B and C\").", project_id=project_id)
+        stored_format = dict(chosen[0].get("format") or {})
+        if stored_format.get("nights"):
+            self._trip_nights = int(stored_format["nights"])
+        if not self._segment and stored_format.get("segment"):
+            self._segment = next(
+                (key for key, spec in self.TRAVELLER_SEGMENTS.items() if spec[0] == stored_format["segment"]), "",
+            )
+        self._calendar = self._calendar or TripCalendar.from_dict(stored_format.get("calendar"))
+        self._option_note = (
+            "COMBINE: build one new concept from these saved options, following the team's request exactly "
+            f"(what to take from each): \"{request[:600]}\". "
+            + " ".join(
+                f"Option {o['label']}: " + json.dumps({k: (o.get("editorial") or {}).get(k) for k in (
+                    "editorial_proposition", "strongest_experience", "possible_story_structure",
+                    "why_someone_would_want_it",
+                )}, ensure_ascii=False)[:2500]
+                for o in chosen
+            )
+        )
+        outcome = self._editorial_flow(project_id, state, request, approve=False)
+        self._option_note = ""
+        fresh = dict(self._db.project_state(project_id).get("concept") or {})
+        if fresh.get("status") in {"shortlisted", "approved"} and fresh.get("editorial") != concept_state.get("editorial"):
+            label = "ABCD"[len(options)] if len(options) < 4 else "D"
+            snapshot = {k: fresh[k] for k in self.OPTION_KEYS if k in fresh}
+            snapshot.update(label=label, title=str((fresh.get("outline") or {}).get("title") or ""),
+                            combined_from=[o["label"] for o in chosen])
+            options = [o for o in options if o.get("label") != label] + [snapshot]
+            self._db.update_project_state(project_id, "concept", {**fresh, "options": options, "active_option": label})
+            outcome = replace(outcome, markdown=f"*Option {label}* (combining {', '.join(o['label'] for o in chosen)})\n\n"
+                              + outcome.markdown + f"\n\n_Option {label} is active; say \"write a sample draft\" to draft it._")
+        else:
+            # Nothing passed: keep the options and the active one as they were.
+            self._db.update_project_state(project_id, "concept", concept_state)
+        return outcome
 
     def _run_editorial(
         self, project_id: int, hotel: str, research: ResearchResult, user_goal: str,
