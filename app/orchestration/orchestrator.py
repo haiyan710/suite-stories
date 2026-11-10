@@ -536,6 +536,8 @@ class EditorialOrchestrator:
             outline = {**outline, "calendar": calendar.lines()}
         if amendments:
             outline = {**outline, "user_amendments": amendments}
+        hotel_name = str(state.get("project", {}).get("hotel", ""))
+        outline = {**outline, **self._house_style_payload(hotel_name)}
         draft: DraftResult | None = None
         critique: Any = None
         qa_revisions: list[str] = []
@@ -611,7 +613,7 @@ class EditorialOrchestrator:
         if outline:
             concept_state["outline"] = {
                 k: v for k, v in outline.items()
-                if k not in {"travel_estimates", "travel_fixes", "calendar", "user_amendments"}
+                if k not in {"travel_estimates", "travel_fixes", "calendar", "user_amendments", "house_style", "contacts"}
             }
         concept_state["sample_draft"] = {
             **draft.to_dict(), "qa": critique.to_dict(), "qa_fixes": fixes, "private_sources": private,
@@ -644,13 +646,69 @@ class EditorialOrchestrator:
         """Add what Python can see (dates, house style, travel times) to the critic's fixes."""
         issues = check_draft(
             draft.body, headline=draft.headline, standfirst=draft.standfirst, calendar=calendar,
-            banned_phrases=self._settings.banned_phrases,
+            banned_phrases=self._banned_phrases(),
         )
         new = [issue for issue in issues if issue not in (critique.revision_instructions or [])]
         if not new:
             return critique
         verdict = "PASS_WITH_REVISIONS" if critique.verdict == "PASS" else critique.verdict
         return replace(critique, verdict=verdict, revision_instructions=[*(critique.revision_instructions or []), *new])
+
+    def _banned_phrases(self) -> list[str]:
+        rows = [str(r["rule"]) for r in self._db.style_rules() if r["kind"] == "banned"]
+        return list(dict.fromkeys([*rows, *self._settings.banned_phrases]))
+
+    def _house_style_payload(self, hotel: str) -> dict[str, Any]:
+        """House rules, banned phrases and who to ask, for the outline, writer and draft critic."""
+        rules = [str(r["rule"]) for r in self._db.style_rules() if r["kind"] != "banned"]
+        banned = self._banned_phrases()
+        if banned:
+            rules.append("Never write: " + "; ".join(f'"{b}"' for b in banned) + ".")
+        payload: dict[str, Any] = {"house_style": rules}
+        contacts = self._db.contacts(hotel) if hotel else {}
+        if contacts:
+            payload["contacts"] = contacts
+        return payload
+
+    _STYLE_ADD = re.compile(r"^(?:add\s+)?(?:style rule|house style rule|house style)\s*:\s*(.+)$", re.I | re.S)
+    _STYLE_BAN = re.compile(r"^(?:banned phrase|ban phrase|never write)\s*:\s*(.+)$", re.I | re.S)
+    _STYLE_LIST = re.compile(r"^(?:show\s+|list\s+)?(?:the\s+)?(?:style rules|house style)\s*\??$", re.I)
+    _STYLE_DROP = re.compile(r"^(?:remove|delete|drop)\s+style rule\s*#?(\d+)\s*$", re.I)
+    _CONTACT = re.compile(r"^(hotel contact|editor)\s*:\s*([^\n]{1,60})$", re.I)
+
+    def _style_command(self, user_text: str, user_id: str, project_row: Any) -> str | None:
+        """Reply to a house-style or contact command, or None when the message is not one."""
+        text = re.sub(r"<@[^>]+>", "", user_text or "").strip()
+        if (m := self._STYLE_ADD.match(text)):
+            rule_id = self._db.add_style_rule(m.group(1), kind="rule", created_by=user_id)
+            return f"Added house style rule #{rule_id}. Drafts from now on follow it."
+        if (m := self._STYLE_BAN.match(text)):
+            phrases = [p.strip().strip('"') for p in re.split(r"[|;]", m.group(1)) if p.strip()]
+            ids = [self._db.add_style_rule(p, kind="banned", created_by=user_id) for p in phrases]
+            return f"Banned {', '.join(repr(p) for p in phrases)} (#{', #'.join(map(str, ids))})."
+        if self._STYLE_LIST.match(text):
+            rows = self._db.style_rules()
+            rules = [f"#{r['id']} {r['rule']}" for r in rows if r["kind"] != "banned"]
+            banned = [f"#{r['id']} \"{r['rule']}\"" for r in rows if r["kind"] == "banned"]
+            lines = ["*House style*", *[f"• {r}" for r in rules]]
+            if banned:
+                lines += ["*Never write*", " · ".join(banned)]
+            lines.append("_Add one with \"style rule: ...\" or \"banned phrase: ...\"; remove with \"remove style rule #N\"._")
+            return "\n".join(lines)
+        if (m := self._STYLE_DROP.match(text)):
+            done = self._db.remove_style_rule(int(m.group(1)))
+            return f"Removed style rule #{m.group(1)}." if done else f"There is no active style rule #{m.group(1)}."
+        if (m := self._CONTACT.match(text)):
+            role = "hotel" if m.group(1).lower().startswith("hotel") else "editor"
+            name = m.group(2).strip()
+            if role == "hotel":
+                if not project_row:
+                    return "Tell me the hotel contact inside a hotel's thread, so I know which hotel it is for."
+                self._db.set_contact(str(project_row["hotel"]), "hotel", name)
+                return f"Noted: {name} is the contact at {project_row['hotel']}. Drafts will ask {name} by name."
+            self._db.set_contact("", "editor", name)
+            return f"Noted: {name} is the editor who raises [ASK] notes with the hotel."
+        return None
 
     @staticmethod
     def _amendment_from(request: str) -> str:
@@ -802,6 +860,9 @@ class EditorialOrchestrator:
         qa = EditorialOrchestrator._qa_lines(critique, fixes)
         if draft.tk_items:
             qa.append(f"• {len(draft.tk_items)} [TK] gaps to fill from the hotel")
+        asks = re.findall(r"\[ASK\b[^\]]*\]", draft.body)
+        if asks:
+            qa.append(f"• {len(asks)} [ASK] notes for the editor to raise with the hotel")
         parts.append("\n".join(qa))
         writer = "Claude" if private or "claude" in draft.model.lower() else (draft.model or "GLM")
         note = f"_Drafted by {writer}"
@@ -889,6 +950,9 @@ class EditorialOrchestrator:
             )
         project_row = self._db.project_for_thread(thread_key) if thread_key else None
         project_state = self._db.project_state(project_row["id"]) if project_row else {}
+        style_reply = self._style_command(user_text, user_id, project_row)
+        if style_reply is not None:
+            return OrchestratorOutcome(style_reply, project_id=project_row["id"] if project_row else None)
         route = self._classify(user_text, history, session, project_state)
         self._trip_nights_explicit = self._parse_trip_nights(user_text)
         self._segment = self._parse_segment(user_text)
@@ -2720,6 +2784,7 @@ class EditorialOrchestrator:
         }
         if logistics:
             payload["logistics"] = {"issues": logistics.get("issues", []), "legs": logistics.get("lines", [])}
+        payload["house_style"] = self._house_style_payload(payload["hotel"])["house_style"]
         try:
             self._notify(STEP_PROGRESS_PREFIX + "Writing it up as a short outline")
             response = self._fast_provider.complete(

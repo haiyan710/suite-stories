@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
-from .schema import SCHEMA_SQL, SCHEMA_VERSION
+from .schema import DEFAULT_STYLE_RULES, SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,7 @@ class Database:
                     "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
                 )
+                self._seed_style_rules()
             else:
                 current = int(row["value"])
                 if current < 2:
@@ -152,6 +153,8 @@ class Database:
                     )
                 if current < 5:
                     self._backfill_fact_cache = True
+                if current < 7:
+                    self._seed_style_rules()
                 if current < 4:
                     project_columns = {
                         r["name"] for r in self._conn.execute("PRAGMA table_info(projects)").fetchall()
@@ -323,6 +326,54 @@ class Database:
                 rows,
             )
         return len(rows)
+
+    def _seed_style_rules(self) -> None:
+        """Default house style, once (caller holds the lock)."""
+        if self._conn.execute("SELECT COUNT(*) FROM style_rules").fetchone()[0] == 0:
+            self._conn.executemany(
+                "INSERT INTO style_rules (rule, kind, created_by) VALUES (?, ?, 'default')",
+                [(rule, kind) for kind, rule in DEFAULT_STYLE_RULES],
+            )
+
+    def style_rules(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM style_rules WHERE active=1 ORDER BY kind DESC, id"
+            ).fetchall()
+
+    def add_style_rule(self, rule: str, *, kind: str = "rule", created_by: str = "") -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO style_rules (rule, kind, created_by) VALUES (?, ?, ?)",
+                (rule.strip(), kind, created_by),
+            )
+            return int(cur.lastrowid)
+
+    def remove_style_rule(self, rule_id: int) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute("UPDATE style_rules SET active=0 WHERE id=? AND active=1", (rule_id,))
+            return cur.rowcount > 0
+
+    def set_contact(self, hotel: str, role: str, name: str) -> None:
+        key = self.hotel_key(hotel) if hotel else ""  # takes the lock itself
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO contacts (hotel_key, role, name) VALUES (?, ?, ?) "
+                "ON CONFLICT(hotel_key, role) DO UPDATE SET name=excluded.name",
+                (key, role, name.strip()),
+            )
+
+    def contacts(self, hotel: str) -> dict[str, str]:
+        """{'hotel': ..., 'editor': ...} for a hotel; the editor falls back to the default one."""
+        key = self.hotel_key(hotel) if hotel else ""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT hotel_key, role, name FROM contacts WHERE hotel_key IN (?, '')", (key,)
+            ).fetchall()
+        found: dict[str, str] = {}
+        for row in sorted(rows, key=lambda r: r["hotel_key"] != ""):  # default first, hotel's own wins
+            found[row["role"]] = row["name"]
+        return found
 
     def geo_lookup(self, query: str) -> sqlite3.Row | None:
         with self._lock:

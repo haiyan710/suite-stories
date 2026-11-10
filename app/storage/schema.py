@@ -4,7 +4,7 @@ Deliberately small: four tables plus a lightweight thread-history table.
 Migrations are additive (see db.py).
 """
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -186,4 +186,40 @@ CREATE TABLE IF NOT EXISTS geo_cache (
     lon REAL,
     fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- House style the writer and critics follow, editable from Slack ("style rule: ...").
+-- kind: rule (an instruction) | banned (a phrase the copy must not contain).
+CREATE TABLE IF NOT EXISTS style_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'rule',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Who to ask: the hotel's contact per hotel_key, and the editor (hotel_key '').
+CREATE TABLE IF NOT EXISTS contacts (
+    hotel_key TEXT NOT NULL,
+    role TEXT NOT NULL,   -- hotel | editor
+    name TEXT NOT NULL,
+    PRIMARY KEY (hotel_key, role)
+);
 """
+
+# House style seeded once (schema v7), from a client's review of the first drafts:
+# readers should get recommendations, not citations.
+DEFAULT_STYLE_RULES: tuple[tuple[str, str], ...] = (
+    ("rule", "Never name a source in the copy (no publication, review site, blog, 'the hotel says' or "
+             "'guests describe'): turn the claim into a direct recommendation. A guide listing or award "
+             "that is itself the point, such as the Michelin Guide, may be named."),
+    ("rule", "Every outside place the plan recommends gets one line on why it is worth the visit, from the "
+             "evidence (a story, a masterpiece, a view, how it looks at night)."),
+    ("rule", "Every restaurant names a dish from the evidence, or asks the hotel contact for one with an "
+             "[ASK ...] note."),
+    *(("banned", phrase) for phrase in (
+        "one reviewer", "a reviewer", "reviewers say", "reviewers describe", "guests describe",
+        "guests report", "guests say", "per the hotel", "the hotel says", "the hotel describes",
+        "press describes", "according to", "Time Out",
+    )),
+)

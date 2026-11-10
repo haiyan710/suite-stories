@@ -15,6 +15,9 @@ from ..prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
+# An editor's note asking the hotel contact for something ("[ASK ANNA: ...]").
+ASK_NOTE = r"\[ASK\b[^\]]*\]"
+
 
 def drop_echo_paragraphs(body: str) -> str:
     """Remove a stray paragraph whose sentences all already appear earlier in the piece.
@@ -71,6 +74,8 @@ class WriterAgent:
             body=body,
             # The body is the source of truth; the model's own list drifted from it.
             tk_items=re.findall(r"\[TK[^\]]*\]", body),
+            ask_items=re.findall(ASK_NOTE, body),
+            source_notes=[n for n in data.get("source_notes") or [] if isinstance(n, dict)][:40],
             writer_notes=str(data.get("writer_notes") or ""),
             model=response.model,
         )
@@ -112,7 +117,7 @@ class WriterAgent:
         return DraftResult(
             status="complete", headline=headline,
             standfirst=str(data.get("standfirst") or "").strip() or draft.standfirst,
-            body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body),
+            body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body), ask_items=re.findall(ASK_NOTE, body),
             writer_notes=draft.writer_notes, model=draft.model,
         )
 
@@ -154,7 +159,7 @@ class WriterAgent:
         skipped = [str(x) for x in data.get("skipped") or [] if str(x).strip()]
         fixed = DraftResult(
             status="complete", headline=fields["headline"].strip(), standfirst=fields["standfirst"].strip(),
-            body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body),
+            body=body, tk_items=re.findall(r"\[TK[^\]]*\]", body), ask_items=re.findall(ASK_NOTE, body),
             writer_notes=draft.writer_notes, model=draft.model,
         )
         return fixed, applied, skipped
@@ -165,6 +170,8 @@ class WriterAgent:
             return "empty body"
         if sorted(re.findall(r"\[TK[^\]]*\]", original)) != sorted(re.findall(r"\[TK[^\]]*\]", rewritten)):
             return "TK placeholders changed"
+        if sorted(re.findall(ASK_NOTE, original)) != sorted(re.findall(ASK_NOTE, rewritten)):
+            return "ASK notes changed"
         heads = lambda text: [line.strip() for line in text.splitlines() if line.strip().startswith("## ")]
         if heads(original) != heads(rewritten):
             return "subheads changed"

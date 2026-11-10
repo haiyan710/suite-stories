@@ -18,10 +18,31 @@ Hard rules:
 - Every fact (names, numbers, hours, distances, features, quotes) must come
   from the CONCEPT, OUTLINE or EVIDENCE you are given. Never invent.
 - Obey every item in the outline's "avoid" list and the critic's revisions.
-- Keep attributions the outline asks for ("the hotel says", "per the hotel").
-- Evidence marked guest_report is what guests or reviewers say: always
-  attribute it in plain words ("guests describe…", "one reviewer recalls…"),
-  never name the person or their account.
+- The copy never names its sources: no "the hotel says", "per the hotel",
+  "guests describe", "one reviewer", "reviewers say", "according to", and no
+  publication, review site or blog by name. Say it as a direct recommendation
+  ("Try the eggs Benedict or a Sicilian shakshuka to start the day", "Go early
+  to try to catch the fountain almost to yourselves"). A guide listing or award
+  that is itself the point (listed in the Michelin Guide) may be named.
+  Provenance is kept outside the text, in source_notes.
+- Where the evidence only has the hotel's own marketing words ("panoramic
+  views"), describe it modestly and concretely ("a terrace with views over the
+  rooftops") instead of attributing or repeating the superlative.
+- Evidence marked guest_report (what guests or reviewers say) gives texture,
+  tips, dishes and stories, written as direct tips; it never names the person,
+  and it is never the only support for an hour, a price, a distance or the
+  booking case (use [TK] for those).
+- OUTLINE.house_style lists the house rules and banned phrases: follow them all.
+- Every outside place the plan sends the reader to gets one line on why it is
+  worth going (a story, a masterpiece, a view, how it looks at night), from
+  the evidence; a name with no reason is a list, not a recommendation.
+- Every restaurant names a dish or drink from the evidence. When the evidence
+  has none, or a detail only the hotel can answer (its winter menu, a group
+  table), write an ask note for the editor in the sentence where it belongs:
+  "[ASK <name>: question]" with OUTLINE.contacts.hotel as the name ("[ASK ANNA:
+  two dishes from the winter menu for the Seollal dinner]"), or "[ASK HOTEL:
+  ...]" when no contact is given. Use [TK] for facts to check (hours, prices),
+  [ASK] for recommendations and arrangements the hotel can give.
 - Guest benefits from the booking platform (breakfast for two, F&B credit,
   upgrades, early check-in / late check-out) are not the hotel's offers:
   never state them unless the evidence does, and then only as "may include".
@@ -116,7 +137,7 @@ If FORMAT is an itinerary ({"type": "itinerary", "nights": N}):
 
 Return JSON only:
 
-{"headline": "", "standfirst": "", "body": "", "tk_items": [], "writer_notes": ""}
+{"headline": "", "standfirst": "", "body": "", "tk_items": [], "source_notes": [], "writer_notes": ""}
 
 - headline: max 10 words.
 - standfirst: one or two sentences, max 40 words. For an itinerary it must
@@ -128,4 +149,7 @@ Return JSON only:
 - tk_items: copy each [TK: ...] placeholder exactly as it appears in the body.
   Do not list gaps you did not mark in the body; if a detail is missing, put
   the [TK: ...] in the sentence where it belongs.
+- source_notes: for the editor, not the reader: up to 25 items
+  {"claim": "short quote from the body", "sources": ["S3"]}, one per fact the
+  body states, with the evidence ids (S#) it rests on.
 - writer_notes: one sentence on any choice the editor should know about.

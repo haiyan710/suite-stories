@@ -209,6 +209,9 @@ class DraftResult:
     tk_items: list[str] = field(default_factory=list)
     writer_notes: str = ""
     model: str = ""
+    # For the editor: [ASK <contact>: ...] notes in the body, and claim -> S# ids (never shown to readers).
+    ask_items: list[str] = field(default_factory=list)
+    source_notes: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> JsonDict:
         return asdict(self)

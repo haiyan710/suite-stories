@@ -8,7 +8,10 @@ Use only what is in the CONCEPT, CRITIC NOTES and EVIDENCE you are given.
 Never add facts, names, numbers, hours or sensory details that are not
 there. Where the critic restricts a claim (attribute it, soften it, drop
 it), the outline must already obey that restriction: write the safe
-version, not the original.
+version, not the original. The reader-facing fields (title, opening_hook,
+insider_notes) never name a source ("per the hotel", "guests say", a
+publication): soften or make the claim concrete instead. FORMAT and
+house_style rules apply.
 
 When FORMAT.calendar is present, it gives each day's real date, weekday and
 holidays: use it for the days in the outline (and drop any different date or
@@ -31,7 +34,7 @@ Return JSON only:
   passes best, copied exactly from title_options.
 - opening_hook: the one detail from the evidence a reader would retell at
   dinner: a surprising number, an assumption it overturns, a story from the
-  hotel's history or a guest's (attributed as the evidence requires). One
+  hotel's history or a guest's, said directly without naming the source. One
   sentence, max 30 words, facts only. Empty if the evidence has none; then
   make the first check_with_hotel question ask for the hotel's best story.
 - angle: the experience in one plain sentence, max 30 words. No slogan.
@@ -45,8 +48,8 @@ Return JSON only:
   official pages.
 - insider_notes: 2-5 short notes a careful traveller would act on, each
   starting with "Best time:", "Ask for:", "Don't miss:" or "Right for:",
-  max 18 words, only from the evidence (guest reports attributed, e.g.
-  "guests say"). Empty if the evidence has none.
+  max 18 words, only from the evidence, written as direct tips without
+  naming a source. Empty if the evidence has none.
 - avoid: at most 4 claims the writer must not make, max 15 words each. Pick the
   ones most likely to slip into copy; skip housekeeping instructions.
 - check_with_hotel: at most 4 questions for the hotel team's short email Q&A,

@@ -59,7 +59,12 @@ def _inline(text: str) -> str:
     escaped = html.escape(text)
     escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
     escaped = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<em>\1</em>", escaped)
-    return re.sub(r"\[TK:?([^\]]*)\]", r'<mark class="tk">[TK:\1]</mark>', escaped)
+    escaped = re.sub(r"\[TK:?([^\]]*)\]", r'<mark class="tk">[TK:\1]</mark>', escaped)
+    return re.sub(
+        r"\[ASK\s*([^:\]]*):?\s*([^\]]*)\]",
+        lambda m: f'<mark class="ask"><b>Ask {m.group(1).strip().title() or "the hotel"}</b> {m.group(2)}</mark>',
+        escaped,
+    )
 
 
 def embed_image(path: str) -> str:
@@ -181,6 +186,8 @@ section::after {{ content: ""; display: block; clear: both; }}
 @media print {{ .tools, .cover-slot, figure.slot:not(.filled) {{ display: none !important; }} }}
 blockquote {{ margin: 8mm 6mm; padding: 5mm 0; border-top: 1px solid #c9b79f; border-bottom: 1px solid #c9b79f; font-size: 18pt; line-height: 1.35; font-style: italic; text-align: center; color: #3b2f25; page-break-inside: avoid; }}
 mark.tk {{ background: #fff0b8; padding: 0 1mm; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 9pt; }}
+mark.ask {{ background: #e6f0ff; color: #0b3d91; border: 1px solid #9bbcf0; border-radius: 3px; padding: 0 1.5mm; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 9pt; }}
+mark.ask b::before {{ content: "→ "; }}
 footer {{ margin: 10mm 24mm 18mm; padding-top: 4mm; border-top: 1px solid #d8cbb9; font: 8pt/1.5 "Helvetica Neue", Arial, sans-serif; color: #6d655c; page-break-inside: avoid; }}
 footer ul {{ margin: 2mm 0 0; padding-left: 4mm; }}
 h1, h2, p {{ overflow-wrap: break-word; }}

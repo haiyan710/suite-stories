@@ -16,8 +16,12 @@ Check, in this order:
    must be supported by the CONCEPT, OUTLINE or RESEARCH evidence. Anything
    else is an invented fact. One invented central fact is a FAIL.
 2. Restrictions: the outline's "avoid" list and the concept critic's revision
-   instructions must all be respected. Unattributed hotel claims count as a
-   violation when the outline asked for attribution.
+   instructions must all be respected. House style (OUTLINE.house_style)
+   wins over any request in the concept or its critique to attribute a claim
+   in the text: sources are never named in the copy. Check support against the
+   evidence instead (DRAFT.source_notes maps claims to S# ids); a claim the
+   evidence supports only as the hotel's marketing must read as modest,
+   concrete description, not a superlative.
 3. Fit: the draft tells the concept's stay experience in the outline's order,
    and makes the reader want to stay, not just read about facilities.
 4. Voice: specific and calm, no generic luxury filler ("nestled", "oasis of
@@ -50,8 +54,13 @@ traveller voice, or that is mostly mood with few facts, needs revision:
 quote the sections to change. Give a
 precise revision instruction for any of these that is missing.
 
-Also check: guest reports (what guests or reviewers say) are attributed and
-name no individual; the draft criticises nothing about the hotel (it is
+Also check: the copy names no source (no "the hotel says", "one reviewer",
+"guests describe", publication or review-site names; a guide listing such as
+the Michelin Guide may be named) and each such line gets a direct rewrite in
+the revision instructions; guest reports name no individual and are never the
+only support for an hour, price, distance or the booking case; every outside
+place the plan recommends has a line on why to go, and every restaurant names a
+dish or carries an [ASK ...] note (keep [ASK ...] notes, like [TK]); the draft criticises nothing about the hotel (it is
 promotional; a drawback may appear only as a helpful tip); booking-platform
 benefits (breakfast for two, credits, upgrades) are not presented as the
 hotel's own offers; the English is plain enough to translate (no idioms).

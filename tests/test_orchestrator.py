@@ -1728,3 +1728,50 @@ def test_a_request_for_every_kind_of_traveller_is_a_mixed_party_with_lanes():
     piece = EditorialOrchestrator._segment_format("mixed")
     assert "For grandparents" in piece["segment_lanes"]
     assert "segment_lanes" not in EditorialOrchestrator._segment_format("couples")
+
+
+def test_house_style_and_contacts_can_be_set_from_slack_and_reach_the_writer(tmp_path: Path):
+    passed = CritiqueResult(verdict="PASS", reasons=[])
+    o, db, pid, glm, _claude, critic = _draft_setup(tmp_path, [passed, passed])
+    assert "Never name a source" in o.handle_message("style rules", user_id="U1", thread_key="C:1").markdown
+    reply = o.handle_message("style rule: Prices in euros, never won.", user_id="U1", thread_key="C:1").markdown
+    import re as _re
+    rule_id = int(_re.search(r"#(\d+)", reply).group(1))
+    assert "Banned" in o.handle_message("banned phrase: hidden gem | must-see", user_id="U1", thread_key="C:1").markdown
+    assert "contact at" in o.handle_message("hotel contact: Anna", user_id="U1", thread_key="C:1").markdown
+    o.handle_message("editor: Minji", user_id="U1", thread_key="C:1")
+
+    o.handle_message("Write a sample draft", user_id="U1", thread_key="C:1")
+    outline = glm.tasks[-1].outline
+    assert "Prices in euros, never won." in outline["house_style"]
+    assert any('"hidden gem"' in r and '"one reviewer"' in r for r in outline["house_style"])
+    assert outline["contacts"] == {"editor": "Minji", "hotel": "Anna"}
+    assert critic.tasks[-1].outline["contacts"]["hotel"] == "Anna"
+    assert "house_style" not in db.project_state(pid)["concept"]["outline"]
+
+    assert "Removed" in o.handle_message(f"remove style rule #{rule_id}", user_id="U1", thread_key="C:1").markdown
+    assert all(r["rule"] != "Prices in euros, never won." for r in db.style_rules())
+
+
+def test_a_named_source_in_the_copy_is_sent_back_by_the_house_style_check(tmp_path: Path):
+    passed = CritiqueResult(verdict="PASS", reasons=[])
+    o, db, pid, glm, _claude, critic = _draft_setup(tmp_path, [passed, passed, passed, passed])
+
+    class AttributingWriter(FakeWriter):
+        def run(self, task):
+            from app.orchestration.handoffs import DraftResult
+            self.tasks.append(task)
+            return DraftResult(status="complete", headline="Garden Evenings", standfirst="One garden.",
+                               body="## Morning\nOne reviewer loved breakfast at Giano. [ASK ANNA: a dish to order]",
+                               model=self.label)
+
+    o._writer = glm = AttributingWriter("GLM-5.3-Flash")
+    outcome = o.handle_message("Write a sample draft", user_id="U1", thread_key="C:1")
+    assert any('remove "one reviewer"' in r for r in glm.tasks[1].qa_revisions)
+    assert "1 [ASK] notes for the editor" in outcome.markdown
+
+
+def test_layout_renders_ask_notes_for_the_editor():
+    from app.artifacts.layout import _inline
+    html = _inline("Order the pasta [ASK ANNA: two winter dishes] tonight.")
+    assert '<mark class="ask"><b>Ask Anna</b> two winter dishes</mark>' in html

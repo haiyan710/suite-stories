@@ -79,9 +79,11 @@ D. Leftovers
 - Flattering the reader ("as a discerning traveller, you…").
 
 Do not change (these are required by the format):
-- Every fact, name, number, time, price, distance and attribution ("the
-  hotel says", "guests describe"). Do not add any fact, place, quote or
-  detail that is not already in the draft.
+- Every fact, name, number, time, price and distance. Do not add any fact,
+  place, quote or detail that is not already in the draft. A leftover source
+  attribution ("the hotel says", "one reviewer recalls") may become a direct
+  statement of the same claim; never add one.
+- Every [ASK ...] note, copied exactly.
 - Every [TK: ...] placeholder, copied exactly, in a sentence where it still
   makes sense.
 - Every "## " subhead line, exactly as written, in the same order.
