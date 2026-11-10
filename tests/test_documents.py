@@ -269,3 +269,26 @@ def test_layout_without_photos_has_slots_with_shot_briefs():
     assert "Suggested: Room with city view" in page
     assert "data-save" in page and "FileReader" in page
     assert "Photos supplied by the hotel." not in page
+
+
+def test_a_shared_photo_file_becomes_a_hotel_supplied_layout_photo(tmp_path):
+    import io
+    import httpx
+    from PIL import Image
+    from app.tools.documents import _fetch_one, photo_caption_from_name
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (2400, 1600), (120, 80, 40)).save(buffer, "TIFF")
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=buffer.getvalue(),
+                                                                    headers={"content-type": "image/tiff"}))
+    file = {"id": "F7", "name": "GardenRestaurantSalotto1.tiff", "mimetype": "image/tiff", "size": 90_000_000,
+            "url_private_download": "https://files.slack.com/F7", "permalink": "https://slack/F7"}
+    with httpx.Client(transport=transport) as client:
+        doc = _fetch_one(client, file, None, tmp_path)
+    assert doc.kind == "photo" and doc.usable and not doc.ok
+    [image] = doc.images
+    assert max(image.width, image.height) == 1800 and image.caption == "Garden Restaurant Salotto"
+    assert photo_caption_from_name("HOTEL EXTERIOR NIGHT.jpeg") == "HOTEL EXTERIOR NIGHT"
+
+    with httpx.Client(transport=transport) as client:
+        assert "larger than" in _fetch_one(client, {**file, "size": 300_000_000}, None, tmp_path).error

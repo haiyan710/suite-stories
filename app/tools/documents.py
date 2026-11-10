@@ -24,6 +24,9 @@ from .pages import parse_html
 logger = logging.getLogger(__name__)
 
 MAX_DOWNLOAD_BYTES = 40_000_000
+# Hotel photo files (press kits often send full-resolution TIFFs).
+MAX_PHOTO_BYTES = 200_000_000
+PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
 MAX_TEXT_CHARS = 120_000
 # Below this many extracted characters per page a PDF is treated as image-only.
 MIN_PDF_CHARS_PER_PAGE = 200
@@ -63,10 +66,16 @@ class Document:
     text: str = ""
     error: str = ""
     images: tuple[DocumentImage, ...] = field(default_factory=tuple)
+    kind: str = "document"  # document | photo (a shared image file, no text)
 
     @property
     def ok(self) -> bool:
         return bool(self.text.strip()) and not self.error
+
+    @property
+    def usable(self) -> bool:
+        """Text to read, or a photo to add to the layout catalogue."""
+        return self.ok or (self.kind == "photo" and bool(self.images) and not self.error)
 
 
 def slim_file(raw: dict[str, Any]) -> dict[str, Any]:
@@ -127,8 +136,10 @@ def _fetch_one(
     download = file.get("url_private_download", "")
     if not download:
         return Document(**base, error="Slack did not provide a download link (the bot needs the files:read scope)")
-    if int(file.get("size") or 0) > MAX_DOWNLOAD_BYTES:
-        return Document(**base, error=f"file is larger than {MAX_DOWNLOAD_BYTES // 1_000_000} MB")
+    photo = _is_photo(name, file.get("mimetype", ""))
+    limit = MAX_PHOTO_BYTES if photo else MAX_DOWNLOAD_BYTES
+    if int(file.get("size") or 0) > limit:
+        return Document(**base, error=f"file is larger than {limit // 1_000_000} MB")
     try:
         response = client.get(download)
         response.raise_for_status()
@@ -138,6 +149,8 @@ def _fetch_one(
     # Without files:read Slack answers the download URL with its HTML sign-in page.
     if "text/html" in content_type and not _looks_like_html_name(name):
         return Document(**base, error="Slack refused the download (the bot needs the files:read scope)")
+    if photo:
+        return _save_photo(base, response.content, image_dir, str(file.get("id") or "file"), name)
     try:
         text = extract_text(name, file.get("mimetype", ""), response.content)
         if pdf_transcriber and _is_pdf(name, file.get("mimetype", ""), response.content):
@@ -156,6 +169,43 @@ def _fetch_one(
         except Exception as exc:
             logger.warning("image extraction failed name=%s error=%s", name, exc)
     return Document(**base, text=text[:MAX_TEXT_CHARS], images=images)
+
+
+def _is_photo(name: str, mimetype: str) -> bool:
+    return mimetype.startswith("image/") or name.lower().endswith(PHOTO_EXTENSIONS)
+
+
+def photo_caption_from_name(name: str) -> str:
+    """'GianoRestaurantSalotto1.jpg' -> 'Giano Restaurant Salotto' (a first caption before the vision one)."""
+    stem = re.sub(r"\.[A-Za-z0-9]+$", "", name)
+    stem = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", stem)
+    stem = re.sub(r"[_\-]+|\s+\d+\s*$|\d+$", " ", stem)
+    return " ".join(stem.split())
+
+
+def _save_photo(base: dict[str, Any], data: bytes, image_dir: Path | None, file_id: str, name: str) -> Document:
+    """A shared photo file, downscaled into the documents folder for layouts."""
+    from PIL import Image, UnidentifiedImageError
+
+    if image_dir is None:
+        return Document(**base, kind="photo", error="photos are not stored in this setup")
+    try:
+        with Image.open(io.BytesIO(data)) as picture:
+            picture = picture.convert("RGB")
+            if min(picture.size) < MIN_IMAGE_SIDE:
+                return Document(**base, kind="photo", error="the photo is too small for a layout")
+            picture.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
+            out_dir = image_dir / file_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = out_dir / "photo.jpg"
+            picture.save(path, "JPEG", quality=86)
+            image = DocumentImage(
+                path=str(path), page=0, width=picture.width, height=picture.height,
+                caption=photo_caption_from_name(name),
+            )
+    except (UnidentifiedImageError, OSError) as exc:
+        return Document(**base, kind="photo", error=f"could not read the image ({exc.__class__.__name__})")
+    return Document(**base, kind="photo", images=(image,))
 
 
 def page_text(text: str, page: int) -> str:

@@ -665,6 +665,17 @@ class EditorialOrchestrator:
         verdict = "PASS_WITH_REVISIONS" if critique.verdict == "PASS" else critique.verdict
         return replace(critique, verdict=verdict, revision_instructions=[*(critique.revision_instructions or []), *new])
 
+    @staticmethod
+    def _hotel_photo_lines(research: ResearchResult, limit: int = 24) -> list[str]:
+        """Short descriptions of the hotel-supplied photos, so the plan can use what will be shown."""
+        lines = []
+        for asset in research.available_assets:
+            if isinstance(asset, dict) and asset.get("rights") == "hotel_supplied":
+                text = " ".join(str(asset.get("evidence") or asset.get("page_context") or "").split())
+                if text and text not in lines:
+                    lines.append(text[:140])
+        return lines[:limit]
+
     def _banned_phrases(self) -> list[str]:
         rows = [str(r["rule"]) for r in self._db.style_rules() if r["kind"] == "banned"]
         return list(dict.fromkeys([*rows, *self._settings.banned_phrases]))
@@ -1000,7 +1011,7 @@ class EditorialOrchestrator:
             ingested, document_note = self._ingest_documents(documents, project_row, project_state)
             if ingested:
                 project_state = self._db.project_state(project_row["id"])
-                names = ", ".join(d.name for d in documents if d.ok)
+                names = ", ".join(d.name for d in documents if d.usable)
                 user_text += f"\n\n[New hotel-supplied documents added to the research: {names}.]"
                 if intent in {Intent.GENERAL_CONVERSATION, Intent.META_QUESTION, Intent.HELP}:
                     # Files shared "for reference" are filed, not acted on: re-running the
@@ -1074,8 +1085,8 @@ class EditorialOrchestrator:
         self, documents: Sequence[Document], project_row: Any, project_state: dict[str, Any],
     ) -> tuple[bool, str]:
         """Fold attachments into the thread's research. Returns (ingested, note for the reply)."""
-        readable = [d for d in documents if d.ok]
-        problems = [f"• {d.name}: {d.error or 'no readable text'}" for d in documents if not d.ok]
+        readable = [d for d in documents if d.usable]
+        problems = [f"• {d.name}: {d.error or 'no readable text'}" for d in documents if not d.usable]
         if readable and (project_row is None or not project_state.get("research")):
             problems += [f"• {d.name}: there is no researched hotel in this thread yet" for d in readable]
             readable = []
@@ -1398,6 +1409,12 @@ class EditorialOrchestrator:
             calendar = self._calendar_for(self._trip_nights)
             if calendar:
                 instructions.append(calendar.instruction())
+        photos = self._hotel_photo_lines(research)
+        if photos:
+            instructions.append(
+                "HOTEL PHOTOS cleared for the layout (plan moments these can illustrate, without claiming "
+                "anything a photo shows that the evidence does not): " + "; ".join(photos) + "."
+            )
         if self._dining_note:
             instructions.append(self._dining_note)
         if attempt > 1 and "critic required revisions" in prior_failure.lower():

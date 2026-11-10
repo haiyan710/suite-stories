@@ -476,11 +476,13 @@ class ResearchAgent:
                 "evidence": image.caption, "page": image.page, "orientation": image.orientation,
                 "width": image.width, "height": image.height,
                 # The deck page's own words name what the photo shows (e.g. which restaurant).
-                "page_context": page_text(document.text, image.page)[:300],
+                "page_context": (
+                    page_text(document.text, image.page)[:300] if document.kind != "photo" else document.name
+                ),
                 "page_url": document.url, "document": document.name, "source_type": OFFICIAL,
                 "private": True, "rights": "hotel_supplied",
             }
-            for document in documents if document.ok for image in document.images
+            for document in documents if document.usable for image in document.images
         ]
         known = {asset.get("local_path") for asset in research.available_assets if isinstance(asset, dict)}
         research.available_assets = [
