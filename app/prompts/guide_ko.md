@@ -9,7 +9,9 @@ You receive: HOTEL, FORMAT (nights, traveller type, calendar when given), the
 approved CONCEPT and OUTLINE, the team's latest English DRAFT when there is one
 (the most edited text: follow its plan, facts and corrections), STOP NOTES (why
 each place is worth going, closed days, dishes), HOUSE STYLE, EVIDENCE, PHOTOS
-(the hotel's own photos: id and what each shows) and, on a second pass, FIXES
+(the hotel's own photos: id and what each shows), SEASON (the trip's month and
+season, sunrise and sunset per day, typical high, low and rain on those dates)
+and, on a second pass, FIXES
 from a check of your first version.
 
 Rules:
@@ -30,6 +32,18 @@ Rules:
   with a time label: "오전", "오후" or "저녁" (in that order within a day).
   The hotel appears every day. Day 1 starts with arrival and check-in; the last
   day ends with check-out and the airport.
+- Fit the season. Readers travel on these dates, so every moment must work
+  then: outdoor sights, gardens, viewpoints and walks in daylight, ending
+  before SEASON's sunset for that day; after dark, indoor places, dinners and
+  lit-up sights that are meant to be seen at night. Nothing that belongs to
+  another season (a rooftop or terrace dinner, a pool, gelato on a sunny
+  square in winter; a long midday walk in summer heat) unless the inputs say
+  it is open and pleasant on these dates. Winter or summer opening hours you
+  do not have become "[확인 필요: 2월 운영 시간]" (with the trip's month).
+  Weekdays and holidays come from the calendar (closures, crowds).
+- travel_tip: include one seasonal tip from SEASON (how early it gets dark,
+  what to wear for the typical temperatures, rain), written with "약" for
+  numbers ("해가 약 17시 30분에 집니다", "낮 기온 약 14도").
 - Photos: use only PHOTOS ids, and each id at most once on the whole page
   (hero, days and moments together). Give the hero the most inviting photo,
   then each day the photo that fits it best, and a moment a photo only when
@@ -66,5 +80,5 @@ Return JSON only:
 - intro: one sentence above the days, how the plan is paced around the hotel.
 - info.location: the hotel's area; info.duration: "N박 N+1일";
   info.highlights: the two main places joined with " · ".
-- travel_tip: one or two sentences of practical advice for getting around or
-  for seasonal opening, from the inputs.
+- travel_tip: two sentences: one on getting around, one seasonal tip from
+  SEASON (see above).

@@ -25,6 +25,7 @@ from ..storage import ConceptRecord, Database, SessionRecord
 from ..tools.documents import Document
 from ..tools.commons import CommonsPhotos
 from ..tools.geo import GeoClient
+from ..tools.season import SeasonClient, trip_months
 from ..tools.web import BRAND, DESTINATION, EDITORIAL_PRESS, PUBLICATION, OFFICIAL
 from ..states import (
     DRAFTABLE_CONCEPTS, PASSED_CONCEPTS, ConceptStatus, ProjectStage, SessionStatus, Verdict, draft_stage,
@@ -81,6 +82,8 @@ class EditorialOrchestrator:
         private_writer: WriterAgent | None = None,
         logistics: LogisticsAgent | None = None,
         place_photos: CommonsPhotos | None = None,
+        season: SeasonClient | None = None,
+        geo: GeoClient | None = None,
     ) -> None:
         self._settings = settings
         self._provider = provider
@@ -106,6 +109,11 @@ class EditorialOrchestrator:
         self._place_photos = place_photos or (
             CommonsPhotos(settings.artifacts_path / "places") if settings.guide_place_photos else None
         )
+        # Korean guide season (daylight, typical weather); off in hand-built test settings.
+        self._season = season or (SeasonClient() if settings.guide_season else None)
+        self._geo = geo or (GeoClient(
+            photon_url=settings.photon_url, osrm_url=settings.osrm_url, db=db,
+        ) if settings.guide_season else None)
         self._designer = designer or DesignAgent(provider)
         self._builder = builder or BuilderAgent(provider, self._artifacts)
         self._critic = critic or CriticAgent(provider)
@@ -2179,7 +2187,26 @@ class EditorialOrchestrator:
         data = extract_json_block(response.text)
         return data if isinstance(data, dict) and data.get("days") else {}
 
-    def _find_place_photos(self, guide: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    def _trip_season(self, hotel: str, piece_format: dict[str, Any]) -> dict[str, Any]:
+        """Daylight and typical weather on the trip dates, computed, for the guide's timing and tips."""
+        dates = [str(d.get("date")) for d in (piece_format.get("calendar") or {}).get("days") or [] if d.get("date")]
+        if not self._season or not dates:
+            return {}
+        lat = lon = None
+        if self._geo and hotel:
+            try:
+                place = self._geo.geocode(hotel)
+                if place:
+                    lat, lon = place.lat, place.lon
+            except Exception:
+                logger.warning("Hotel geocoding for the season failed", exc_info=True)
+        try:
+            return self._season.trip_season(dates, lat=lat, lon=lon)
+        except Exception:
+            logger.warning("Season lookup failed", exc_info=True)
+            return {}
+
+    def _find_place_photos(self, guide: dict[str, Any], season: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
         """Freely licensed photos of the guide's outside sights: {place: asset}.
 
         Commons search is loose, so one fast call picks among each place's candidates
@@ -2189,7 +2216,9 @@ class EditorialOrchestrator:
         if not self._place_photos or not places:
             return {}
         self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: finding destination photos")
-        candidates = {place: self._place_photos.candidates(place) for place in places}
+        dates = list((season or {}).get("dates") or [])
+        months = trip_months(dates) if dates else set()
+        candidates = {place: self._place_photos.candidates(place, months=months) for place in places}
         candidates = {place: found for place, found in candidates.items() if found}
         if not candidates:
             return {}
@@ -2200,9 +2229,11 @@ class EditorialOrchestrator:
         }
         try:
             response = self._fast_provider.complete(
-                [LLMMessage(role="user", content=json.dumps({"places": [
+                [LLMMessage(role="user", content=json.dumps({
+                    "trip": {k: (season or {}).get(k) for k in ("month", "season")}, "places": [
                     {"place": place, "moment": moments.get(place, ""), "candidates": [
-                        {"i": i, "title": p.title.removeprefix("File:"), "description": p.description[:200]}
+                        {"i": i, "title": p.title.removeprefix("File:"), "description": p.description[:200],
+                         "taken": p.taken}
                         for i, p in enumerate(found)
                     ]} for place, found in candidates.items()
                 ]}, ensure_ascii=False))],
@@ -2255,6 +2286,7 @@ class EditorialOrchestrator:
         outdoor = {key for key, asset in photos.items() if is_outdoor(asset)}
         draft = concept_state.get("sample_draft") or {}
         concept = concept_state.get("editorial") or {}
+        season = self._trip_season(hotel, piece_format)
         plan = {
             "concept": {k: concept.get(k) for k in (
                 "working_title", "editorial_proposition", "strongest_experience", "possible_story_structure",
@@ -2268,6 +2300,7 @@ class EditorialOrchestrator:
         payload = {
             "hotel": hotel, "format": {**piece_format, "nights": nights}, **plan,
             "stop_notes": concept_state.get("venues") or {},
+            "season": season,
             "house_style": self._house_style_payload(hotel)["house_style"],
             "photos": [{"id": key, "shows": str(a.get("evidence") or a.get("page_context") or "")[:200],
                         "outdoor": key in outdoor}
@@ -2285,7 +2318,7 @@ class EditorialOrchestrator:
         try:
             response = self._fast_provider.complete(
                 [LLMMessage(role="user", content=json.dumps({
-                    "guide": guide, "plan": plan, "stop_notes": payload["stop_notes"],
+                    "guide": guide, "plan": plan, "stop_notes": payload["stop_notes"], "season": season,
                     "house_style": payload["house_style"],
                     "evidence": compact_research_json(gated.to_dict(), budget_chars=14000, focus_text=focus),
                 }, ensure_ascii=False))],
@@ -2306,7 +2339,7 @@ class EditorialOrchestrator:
                 guide, applied = revised, len(fixes)
         hotel_ids = list(photos)
         guide = dedupe_photos(guide)
-        places = self._find_place_photos(guide)
+        places = self._find_place_photos(guide, season)
         place_ids = {place: f"w{i}" for i, place in enumerate(places, 1)}
         photos.update({place_ids[place]: asset for place, asset in places.items()})
         guide = fill_empty_days(apply_place_photos(guide, place_ids), hotel_ids, outdoor=outdoor)
@@ -2335,6 +2368,7 @@ class EditorialOrchestrator:
         concept_state["guide_ko"] = {
             "guide": guide, "html": str(html_path), "json": str(json_path), "fixes_applied": applied,
             "open_issues": remaining, "checks": checks, "nights": nights, "photo_credits": credits,
+            "season": season,
         }
         self._db.update_project_state(project_id, "concept", concept_state)
         used = {str(guide.get("hero_photo") or "")} | {
@@ -2349,6 +2383,14 @@ class EditorialOrchestrator:
             f"• Check: {'passed' if not fixes else f'{applied} fixes applied'}"
             + (f"; still open: {'; '.join(remaining[:3])}" if remaining else ""),
         ]
+        if season.get("month"):
+            sunsets = [d["sunset"] for d in season.get("daylight") or []]
+            typical = season.get("typical") or {}
+            notes.append(
+                f"• Timed for {season['month']} ({season.get('season')})"
+                + (f": sunset about {sunsets[0]}–{sunsets[-1]}" if sunsets else "")
+                + (f", typically {typical['low_c']}–{typical['high_c']}°C" if typical else "")
+            )
         if checks:
             notes.append(f"• {len(checks)} [확인 필요] items to confirm with the hotel")
         lines.append("\n".join(notes))

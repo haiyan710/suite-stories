@@ -47,6 +47,7 @@ class CommonsPhoto:
     licence_url: str
     artist: str
     description: str
+    taken: str = ""  # YYYY-MM-DD... when the photo was taken, if the file says
     local_path: str = ""
 
     @property
@@ -62,6 +63,11 @@ def _name_tokens(place: str) -> set[str]:
     """Words of the place's own name (before the first comma, which starts the city)."""
     name = place.split(",")[0]
     return {w for w in re.findall(r"[^\W\d_]{3,}", name.lower()) if w not in _STOPWORDS}
+
+
+def _month(taken: str) -> int:
+    match = re.match(r"\d{4}[-:](\d{2})", taken or "")
+    return int(match.group(1)) if match and 1 <= int(match.group(1)) <= 12 else 0
 
 
 def _series(title: str) -> str:
@@ -93,7 +99,7 @@ class CommonsPhotos:
             "action": "query", "format": "json", "generator": "search", "gsrsearch": query,
             "gsrnamespace": 6, "gsrlimit": limit, "prop": "imageinfo",
             "iiprop": "url|size|mime|extmetadata", "iiurlwidth": THUMB_WIDTH,
-            "iiextmetadatafilter": "LicenseShortName|LicenseUrl|Artist|Restrictions|ImageDescription",
+            "iiextmetadatafilter": "LicenseShortName|LicenseUrl|Artist|Restrictions|ImageDescription|DateTimeOriginal",
         }).json()
         pages = sorted((data.get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
         photos = []
@@ -109,6 +115,7 @@ class CommonsPhotos:
                 width=int(info.get("width") or 0), height=int(info.get("height") or 0),
                 licence=_plain(value("LicenseShortName")), licence_url=value("LicenseUrl"),
                 artist=_plain(value("Artist"))[:80], description=_plain(value("ImageDescription"))[:300],
+                taken=_plain(value("DateTimeOriginal"))[:10],
             ))
         return photos
 
@@ -126,11 +133,13 @@ class CommonsPhotos:
         shown = f"{title} {photo.description}".lower()
         return not tokens or any(token in shown for token in tokens)
 
-    def candidates(self, place: str, limit: int = 8) -> list[CommonsPhoto]:
+    def candidates(self, place: str, limit: int = 8, *, months: set[int] | frozenset[int] = frozenset()) -> list[CommonsPhoto]:
         """Usable photos of a place ("Trevi Fountain, Rome"), best-ranked first, not downloaded.
 
         Quality images first, then a plain search. Commons search is loose (a "Pantheon,
         Rome" search also returns Paris), so the caller has a model pick among them.
+        With `months` (the trip's), photos taken then come first and photos dated in
+        another season last: a summer garden on a February page shows a different trip.
         """
         name = place.split(",")[0].strip()
         found: list[CommonsPhoto] = []
@@ -145,8 +154,10 @@ class CommonsPhotos:
                 # crowd out the garden.
                 if self.usable(photo, place) and _series(photo.title) not in {_series(p.title) for p in found}:
                     found.append(photo)
-            if len(found) >= limit:
+            if len(found) >= limit * 2:
                 break
+        if months:
+            found.sort(key=lambda p: 1 if not _month(p.taken) else 0 if _month(p.taken) in months else 2)
         return found[:limit]
 
     def download(self, photo: CommonsPhoto) -> CommonsPhoto | None:
