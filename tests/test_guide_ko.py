@@ -101,3 +101,15 @@ def test_a_guide_request_without_a_concept_goes_the_normal_way(tmp_path: Path):
     o, db, *_ = setup_orchestrator(tmp_path, ['{"intent":"GENERAL_CONVERSATION"}'])
     outcome = o.handle_message("what is a hotel guide?", user_id="U1", thread_key="C:none")
     assert not outcome.attachments
+
+
+def test_a_photo_is_used_once_per_day():
+    from app.artifacts.guide_ko import dedupe_photos
+    g = guide(hero_photo="p9")
+    g["days"][1]["photo"] = "p2"
+    g["days"][1]["moments"][0]["photo"] = "p2"
+    g["days"][1]["moments"][1]["photo"] = "p3"
+    g["days"][2]["moments"][0]["photo"] = "p9"
+    dedupe_photos(g)
+    assert g["days"][1]["moments"][0]["photo"] == "" and g["days"][1]["moments"][1]["photo"] == "p3"
+    assert g["days"][2]["moments"][0]["photo"] == ""
