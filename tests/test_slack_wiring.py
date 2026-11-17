@@ -262,3 +262,30 @@ def test_socket_watchdog_exits_only_when_errors_pile_up_and_idle():
     assert dog.check() is False and exits == []
     busy[0] = False
     assert dog.check() is True and exits == [1]
+
+
+def test_a_timed_out_upload_is_retried_and_never_fails_the_reply(tmp_path: Path):
+    from app.slack_app import AgentExecutor
+
+    class Client:
+        def __init__(self):
+            self.posts, self.uploads = [], 0
+
+        def chat_postMessage(self, **kwargs):
+            self.posts.append(kwargs["text"])
+            return {"ts": "bot.1"}
+
+        def files_upload_v2(self, **kwargs):
+            self.uploads += 1
+            raise TimeoutError("The write operation timed out")
+
+    settings = Settings(slack_bot_token="x", slack_app_token="x", zai_api_key="x",
+                        database_path=tmp_path / "e.db", allowed_user_ids=frozenset({"U1"}))
+    client = Client()
+    executor = AgentExecutor(settings, SimpleNamespace(client=client), object(), object())
+    executor._upload_client = client
+    page = tmp_path / "guide.html"
+    page.write_text("x" * 2_000_000)
+    executor._upload("C1", "100.1", str(page))
+    assert client.uploads == AgentExecutor.UPLOAD_ATTEMPTS
+    assert len(client.posts) == 1 and "couldn't upload guide.html (2.0 MB)" in client.posts[0]

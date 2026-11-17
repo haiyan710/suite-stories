@@ -20,6 +20,7 @@ from typing import Any
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from .agent import AgentCancelled, AgentError
@@ -95,6 +96,13 @@ def _elapsed(started: float) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+def _display_path(path: str) -> str:
+    try:
+        return str(Path(path).resolve().relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)
+
+
 class AgentExecutor:
     """Single background worker consuming queued Slack events.
 
@@ -103,6 +111,7 @@ class AgentExecutor:
     """
 
     def __init__(self, settings: Settings, bolt_app: App, agent: EditorialOrchestrator, db: Database) -> None:
+        self._upload_client: WebClient | None = None
         import queue
 
         self._settings = settings
@@ -241,17 +250,40 @@ class AgentExecutor:
             logger.error("chat_postMessage failed: %s", exc.response["error"])
             return None
 
+    # Pages with embedded photos run to several MB; the default 30 s write timeout
+    # cut one off mid-upload and the whole reply was reported as failed.
+    UPLOAD_TIMEOUT_SECONDS = 180
+    UPLOAD_ATTEMPTS = 2
+
     def _upload(self, channel: str, thread_ts: str, path: str) -> None:
-        try:
-            self._app.client.files_upload_v2(
-                channel=channel, thread_ts=thread_ts, file=path, filename=Path(path).name,
-                title=Path(path).stem.replace("-", " "),
+        """Attach a file to the thread; a failed upload is reported, never fails the reply."""
+        client = self._app.client
+        if self._upload_client is None:
+            self._upload_client = WebClient(
+                token=client.token, base_url=client.base_url, timeout=self.UPLOAD_TIMEOUT_SECONDS,
             )
-        except SlackApiError as exc:
-            error = exc.response.get("error", "")
-            logger.error("files_upload_v2 failed: %s", error)
-            hint = " (the bot needs the files:write scope)" if error == "missing_scope" else ""
-            self._post(channel, thread_ts, f"I couldn't upload {Path(path).name}{hint}.")
+        name = Path(path).name
+        for attempt in range(1, self.UPLOAD_ATTEMPTS + 1):
+            try:
+                self._upload_client.files_upload_v2(
+                    channel=channel, thread_ts=thread_ts, file=path, filename=name,
+                    title=Path(path).stem.replace("-", " "),
+                )
+                return
+            except SlackApiError as exc:
+                error = exc.response.get("error", "")
+                logger.error("files_upload_v2 failed: %s", error)
+                hint = " (the bot needs the files:write scope)" if error == "missing_scope" else ""
+                self._post(channel, thread_ts, f"I couldn't upload {name}{hint}.")
+                return
+            except Exception:
+                logger.warning("upload of %s failed (attempt %d)", name, attempt, exc_info=True)
+        size_mb = Path(path).stat().st_size / 1_000_000 if Path(path).exists() else 0
+        self._post(
+            channel, thread_ts,
+            f"I couldn't upload {name} ({size_mb:.1f} MB): the connection timed out. "
+            f"It is saved on the bot's machine: `{_display_path(path)}`.",
+        )
 
     def _update(self, channel: str, message_ts: str, text: str) -> bool:
         try:
