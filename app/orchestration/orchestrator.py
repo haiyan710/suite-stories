@@ -15,7 +15,7 @@ from ..agents import BuilderAgent, CriticAgent, DesignAgent, EditorialAgent, Res
 from ..agents.logistics import LogisticsAgent, LogisticsTask
 from ..artifacts import ArtifactManager
 from ..artifacts.layout import embed_image, render_editorial_html, split_sections
-from ..artifacts.guide_ko import dedupe_photos, fill_empty_days, guide_check_items, guide_jsonld, render_guide_html, validate_guide
+from ..artifacts.guide_ko import dedupe_photos, fill_empty_days, guide_check_items, is_outdoor, guide_jsonld, render_guide_html, validate_guide
 from ..artifacts.layout_styles import STYLES, Page, Photo, render_styled_html
 from ..config import Settings
 from ..llm.base import LLMError, LLMMessage, LLMProvider
@@ -2187,6 +2187,11 @@ class EditorialOrchestrator:
         piece_format = dict(concept_state.get("format") or {})
         nights = int(piece_format.get("nights") or 0) or self._trip_nights or 3
         photos = {f"p{i}": asset for i, asset in enumerate(self._cleared_images(research), 1)}
+        # Spaces closed on the trip dates never appear; outdoor ones only where the writer
+        # places a moment in them, never to fill a gap.
+        for key in self._closed_space_photos(photos, state):
+            photos.pop(key, None)
+        outdoor = {key for key, asset in photos.items() if is_outdoor(asset)}
         draft = concept_state.get("sample_draft") or {}
         concept = concept_state.get("editorial") or {}
         plan = {
@@ -2203,7 +2208,8 @@ class EditorialOrchestrator:
             "hotel": hotel, "format": {**piece_format, "nights": nights}, **plan,
             "stop_notes": concept_state.get("venues") or {},
             "house_style": self._house_style_payload(hotel)["house_style"],
-            "photos": [{"id": key, "shows": str(a.get("evidence") or a.get("page_context") or "")[:200]}
+            "photos": [{"id": key, "shows": str(a.get("evidence") or a.get("page_context") or "")[:200],
+                        "outdoor": key in outdoor}
                        for key, a in photos.items()],
             "evidence": compact_research_json(gated.to_dict(), budget_chars=20000, focus_text=focus),
         }
@@ -2237,7 +2243,7 @@ class EditorialOrchestrator:
             revised = self._write_guide({**payload, "previous": guide, "fixes": fixes})
             if revised and len(validate_guide(revised, nights=nights)) <= len(validate_guide(guide, nights=nights)):
                 guide, applied = revised, len(fixes)
-        guide = fill_empty_days(dedupe_photos(guide), list(photos))
+        guide = fill_empty_days(dedupe_photos(guide), list(photos), outdoor=outdoor)
         remaining = validate_guide(guide, nights=nights)
         checks = guide_check_items(guide)
         out_dir = (

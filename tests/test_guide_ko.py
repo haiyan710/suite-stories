@@ -125,3 +125,39 @@ def test_unused_hotel_photos_fill_empty_day_cards_without_repeats():
     g["days"][1]["photo"] = "p3"
     fill_empty_days(dedupe_photos(g), ["p1", "p2", "p3", "p4"])
     assert [d["photo"] for d in g["days"]] == ["p2", "p3", "p4", ""]
+
+
+def test_outdoor_photos_never_fill_a_gap():
+    from app.artifacts.guide_ko import fill_empty_days, is_outdoor
+    assert is_outdoor({"evidence": "Rooftop terrace with set tables"})
+    assert is_outdoor({"evidence": "Pink-walled courtyard with lanterns"})
+    assert not is_outdoor({"evidence": "Warmly lit restaurant dining room"})
+    g = guide(hero_photo="p1")
+    fill_empty_days(g, ["p1", "p2", "p3", "p4"], outdoor={"p2", "p4"})
+    assert [d["photo"] for d in g["days"]] == ["p1", "p3", "", ""]  # Day 1 keeps its own photo
+
+
+def test_closed_and_outdoor_photos_are_handled_in_the_flow(tmp_path):
+    from PIL import Image
+    o, db, pid, glm, _claude, critic = _draft_setup(tmp_path, [CritiqueResult(verdict="PASS", reasons=[])])
+    research = dict(db.project_state(pid)["research"])
+    assets = []
+    for name, shows in (("a", "Corner of the hotel at dusk"), ("b", "Rooftop terrace with loungers"),
+                        ("c", "Sky Deck plunge pool"), ("d", "Lounge with curved sofas")):
+        path = tmp_path / f"{name}.jpg"
+        Image.new("RGB", (1600, 900)).save(path)
+        assets.append({"local_path": str(path), "rights": "hotel_supplied", "evidence": shows, "width": 1600, "height": 900})
+    research["available_assets"] = assets
+    db.update_project_state(pid, "research", research)
+    concept = dict(db.project_state(pid)["concept"])
+    concept["format"] = {"type": "itinerary", "nights": 3}
+    concept["venues"] = {"hotel_spaces": [{"name": "Sky Deck", "open_on_trip": "no"}]}
+    db.update_project_state(pid, "concept", concept)
+    o._provider = writer = GuideProvider([guide(hero_photo="p1")])
+    o._fast_provider = CheckProvider({"verdict": "PASS", "fixes": []})
+    o.handle_message("hotel guide", user_id="U1", thread_key="C:1")
+    sent = json.loads(writer.prompts[0][1])["photos"]
+    assert [p["id"] for p in sent] == ["p1", "p2", "p4"]  # the closed Sky Deck is gone
+    assert [p["outdoor"] for p in sent] == [False, True, False]
+    days = db.project_state(pid)["concept"]["guide_ko"]["guide"]["days"]
+    assert [d["photo"] for d in days] == ["p4", "", "", ""]  # only the indoor lounge fills a gap

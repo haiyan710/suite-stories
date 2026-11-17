@@ -35,6 +35,10 @@ Rules:
   then each day the photo that fits it best, and a moment a photo only when
   one clearly shows that moment. With fewer photos than slots, leave "" (the
   editor adds photos there); never repeat a photo to fill a slot.
+- A photo marked "outdoor" (rooftop, pool, terrace, courtyard, garden) goes
+  only on a moment that takes place in that space and only if the plan has
+  guests use it on the trip dates; never use one as a day or hero photo for a
+  day spent elsewhere, and never for a space the stop notes say is closed.
 
 Return JSON only:
 
