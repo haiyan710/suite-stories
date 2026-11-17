@@ -308,3 +308,40 @@ def test_photo_dates_written_in_words_are_read():
     from app.tools.commons import _month
     assert [_month(t) for t in ("2010-02-03", "2010:02:03 10:00", "16 August 2013", "Sept 2011", "Marching band", "")] \
         == [2, 2, 8, 9, 0, 0]
+
+
+class LookProvider(CheckProvider):
+    """A Claude-like fast model that can open images; rejects the first place's photos."""
+
+    def __init__(self):
+        super().__init__({"verdict": "PASS", "fixes": []})
+        self.looked = []
+
+    def look_at_images(self, paths, *, system, task):
+        self.looked.append((list(paths), json.loads(task)))
+        places = json.loads(task)["places"]
+        return json.dumps({"picks": [{"place": places[0]["place"], "pick": -1, "why": "blossom"},
+                                     *[{"place": p["place"], "pick": 1, "why": "bare trees"} for p in places[1:]]]})
+
+
+def test_destination_photos_are_judged_by_looking_at_them(tmp_path):
+    from PIL import Image
+    o, db, pid, *_ = _draft_setup(tmp_path, [CritiqueResult(verdict="PASS", reasons=[])])
+    image = tmp_path / "sight.jpg"
+    Image.new("RGB", (1600, 1000)).save(image)
+    concept = dict(db.project_state(pid)["concept"])
+    concept["format"] = {"type": "itinerary", "nights": 3}
+    db.update_project_state(pid, "concept", concept)
+    written = guide(hero_photo="")
+    written["days"][1]["moments"][0].update(place="Fountain Square, Harbourtown")
+    written["days"][2]["moments"][0].update(place="Hill Museum, Harbourtown")
+    o._provider = GuideProvider([written])
+    o._fast_provider = look = LookProvider()
+    o._place_photos = FakeCommons(image)
+    o._season = FakeSeason()
+    o.handle_message("hotel guide", user_id="U1", thread_key="C:1")
+    paths, task = look.looked[0]
+    assert len(paths) == 4 and task["places"][0]["photos"][1]["path"] == str(image)
+    saved = db.project_state(pid)["concept"]["guide_ko"]
+    assert list(saved["photo_credits"].values())[0]["place"] == "Hill Museum, Harbourtown"  # the blossom one is dropped
+    assert saved["guide"]["days"][1]["photo"] == ""

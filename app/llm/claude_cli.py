@@ -118,6 +118,21 @@ class ClaudeCliProvider:
         lines = [str(line) for line in lines] if isinstance(lines, list) else []
         return (lines + [""] * len(paths))[: len(paths)]
 
+    def look_at_images(self, paths: Sequence[Path], *, system: str, task: str) -> str:
+        """Run one call that opens the listed images with the Read tool; the raw answer text.
+
+        For judgements that need the pixels rather than a caption (does this photo look
+        like early February?). All images must sit in one directory.
+        """
+        if not paths:
+            return ""
+        listing = "\n".join(f"- {p}" for p in paths)
+        response = self._run(
+            [LLMMessage(role="user", content=f"{task}\n\nOpen each of these images with the Read tool:\n{listing}")],
+            system=system, tools="Read", extra_args=["--add-dir", str(Path(paths[0]).parent)],
+        )
+        return response.text
+
     # ------------------------------------------------------------------
 
     def _command(self, *, system: str | None, tools: str) -> list[str]:

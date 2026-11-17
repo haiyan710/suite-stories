@@ -30,6 +30,7 @@ _FILES = {
     "guide_ko": "guide_ko.md",
     "guide_ko_check": "guide_ko_check.md",
     "guide_place_photos": "guide_place_photos.md",
+    "guide_place_photos_look": "guide_place_photos_look.md",
     "guest_experience": "guest_experience.md",
     "humanizer": "humanizer.md",
     "draft_fixes": "draft_fixes.md",

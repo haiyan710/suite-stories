@@ -65,6 +65,10 @@ class OrchestratorOutcome:
     attachments: list[str] = field(default_factory=list)
 
 
+# Commons photos per place that Claude opens to judge the season (downloaded first).
+LOOK_CANDIDATES = 4
+
+
 class EditorialOrchestrator:
     """The only conversational brain exposed to Slack."""
 
@@ -2209,8 +2213,9 @@ class EditorialOrchestrator:
     def _find_place_photos(self, guide: dict[str, Any], season: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
         """Freely licensed photos of the guide's outside sights: {place: asset}.
 
-        Commons search is loose, so one fast call picks among each place's candidates
-        (or none); only the picks are downloaded.
+        Commons search is loose and a date says little about how a photo looks, so
+        Claude opens the top candidates of each place and picks one in the trip's
+        season, or none. A provider that cannot read images picks from the titles.
         """
         places = guide_places(guide)
         if not self._place_photos or not places:
@@ -2230,24 +2235,46 @@ class EditorialOrchestrator:
             for d in guide.get("days") or [] if isinstance(d, dict)
             for m in d.get("moments") or [] if isinstance(m, dict)
         }
+        look = getattr(self._fast_provider, "look_at_images", None)
         try:
-            response = self._fast_provider.complete(
-                [LLMMessage(role="user", content=json.dumps({
-                    "trip": {k: (season or {}).get(k) for k in ("month", "season")}, "places": [
-                    {"place": place, "moment": moments.get(place, ""), "candidates": [
-                        {"i": i, "title": p.title.removeprefix("File:"), "description": p.description[:200],
-                         "taken": p.taken}
+            if callable(look):
+                # Dates are not enough (late February already looks like spring), so
+                # Claude opens the top candidates and judges the pixels.
+                candidates = {
+                    place: [p for p in (self._place_photos.download(x) for x in found[:LOOK_CANDIDATES]) if p]
+                    for place, found in candidates.items()
+                }
+                listing = [
+                    {"place": place, "moment": moments.get(place, ""), "photos": [
+                        {"i": i, "path": p.local_path, "title": p.title.removeprefix("File:"), "taken": p.taken[:10]}
                         for i, p in enumerate(found)
-                    ]} for place, found in candidates.items()
-                ]}, ensure_ascii=False))],
-                system=load_prompt("guide_place_photos"), max_tokens=800, temperature=0.0,
-            )
-            picks = (extract_json_block(response.text) or {}).get("picks") or []
+                    ]} for place, found in candidates.items() if found
+                ]
+                paths = [Path(x["path"]) for entry in listing for x in entry["photos"]]
+                text = look(paths, system=load_prompt("guide_place_photos_look"), task=json.dumps({
+                    "trip_dates": dates, "season": (season or {}).get("season"), "places": listing,
+                }, ensure_ascii=False))
+            else:
+                text = self._fast_provider.complete(
+                    [LLMMessage(role="user", content=json.dumps({
+                        "trip": {k: (season or {}).get(k) for k in ("month", "season")}, "places": [
+                        {"place": place, "moment": moments.get(place, ""), "candidates": [
+                            {"i": i, "title": p.title.removeprefix("File:"), "description": p.description[:200],
+                             "taken": p.taken}
+                            for i, p in enumerate(found)
+                        ]} for place, found in candidates.items()
+                    ]}, ensure_ascii=False))],
+                    system=load_prompt("guide_place_photos"), max_tokens=800, temperature=0.0,
+                ).text
+            picks = (extract_json_block(text) or {}).get("picks") or []
         except AgentCancelled:
             raise
         except Exception:
             logger.warning("Destination photo pick failed", exc_info=True)
             return {}
+        rejected = [p.get("place") for p in picks if isinstance(p, dict) and str(p.get("pick")) == "-1"]
+        if rejected:
+            logger.info("No in-season photo for %s", rejected)
         chosen: dict[str, dict[str, Any]] = {}
         for pick in picks if isinstance(picks, list) else []:
             place = str((pick or {}).get("place") or "").strip() if isinstance(pick, dict) else ""
@@ -2258,7 +2285,7 @@ class EditorialOrchestrator:
                 continue
             if not 0 <= index < len(found):
                 continue
-            photo = self._place_photos.download(found[index])
+            photo = found[index] if found[index].local_path else self._place_photos.download(found[index])
             if photo:
                 chosen[place] = {
                     "local_path": photo.local_path, "credit": photo.credit, "evidence": place,
