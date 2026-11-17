@@ -32,10 +32,28 @@ def season_name(month: int, lat: float | None) -> str:
     return northern
 
 
-def trip_months(dates: list[str]) -> set[int]:
-    """The trip's months and their neighbours: photos from then look like the trip."""
+# Meteorological seasons as month groups (the same groups in both hemispheres; only the names swap).
+_SEASON_GROUPS = ({12, 1, 2}, {3, 4, 5}, {6, 7, 8}, {9, 10, 11})
+
+
+def season_months(dates: list[str]) -> set[int]:
+    """The months that look like the trip: those of its own season.
+
+    A February trip allows December to February; March already shows spring and
+    April a different city, so photos dated then are not used.
+    """
     months = {date.fromisoformat(d).month for d in dates}
-    return {((m + shift - 1) % 12) + 1 for m in months for shift in (-1, 0, 1)}
+    return set().union(*(group for group in _SEASON_GROUPS if group & months))
+
+
+def month_names(dates: list[str]) -> list[str]:
+    """The trip's own months by name, in order ("February")."""
+    seen: list[str] = []
+    for d in dates:
+        name = MONTHS[date.fromisoformat(d).month - 1]
+        if name not in seen:
+            seen.append(name)
+    return seen
 
 
 def _years_back(day: str, years: int) -> str:

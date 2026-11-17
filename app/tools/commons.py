@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 API_URL = "https://commons.wikimedia.org/w/api.php"
 USER_AGENT = "SuiteStoriesBot/1.0 (internal editorial tool)"
-REQUEST_GAP_SECONDS = 0.5
+REQUEST_GAP_SECONDS = 1.0
+RETRY_AFTER_SECONDS = 5.0
 THUMB_WIDTH = 1600
 MIN_WIDTH = 1200
 _FREE_LICENCE = re.compile(r"^(?:cc0|cc[- ]zero|public domain|pd\b|pdm|cc by(?:-sa)? \d)", re.I)
@@ -65,9 +66,24 @@ def _name_tokens(place: str) -> set[str]:
     return {w for w in re.findall(r"[^\W\d_]{3,}", name.lower()) if w not in _STOPWORDS}
 
 
+_MONTH_WORDS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+
+
 def _month(taken: str) -> int:
-    match = re.match(r"\d{4}[-:](\d{2})", taken or "")
-    return int(match.group(1)) if match and 1 <= int(match.group(1)) <= 12 else 0
+    """The month a photo was taken (1-12), from "2010-02-03", "2010:02:03" or "16 August 2013"; 0 if unknown."""
+    text = (taken or "").strip().lower()
+    match = re.match(r"\d{4}[-:/](\d{1,2})\b", text)
+    if match and 1 <= int(match.group(1)) <= 12:
+        return int(match.group(1))
+    words = re.findall(r"[a-z]+", text)
+    for word in words:
+        if word[:3] in _MONTH_WORDS and word in {word[:3], _FULL[word[:3]], "sept"}:
+            return _MONTH_WORDS.index(word[:3]) + 1
+    return 0
+
+
+_FULL = dict(zip(_MONTH_WORDS, ("january", "february", "march", "april", "may", "june", "july", "august",
+                                "september", "october", "november", "december")))
 
 
 def _series(title: str) -> str:
@@ -85,10 +101,14 @@ class CommonsPhotos:
         if wait > 0:
             time.sleep(wait)
         try:
-            response = httpx.get(
-                url, params=params, headers={"User-Agent": USER_AGENT}, timeout=self._timeout,
-                follow_redirects=True,
-            )
+            for attempt in range(2):
+                response = httpx.get(
+                    url, params=params, headers={"User-Agent": USER_AGENT}, timeout=self._timeout,
+                    follow_redirects=True,
+                )
+                if response.status_code != 429 or attempt:
+                    break
+                time.sleep(RETRY_AFTER_SECONDS)  # Commons rate limit: one slower retry
             response.raise_for_status()
             return response
         finally:
@@ -115,7 +135,7 @@ class CommonsPhotos:
                 width=int(info.get("width") or 0), height=int(info.get("height") or 0),
                 licence=_plain(value("LicenseShortName")), licence_url=value("LicenseUrl"),
                 artist=_plain(value("Artist"))[:80], description=_plain(value("ImageDescription"))[:300],
-                taken=_plain(value("DateTimeOriginal"))[:10],
+                taken=_plain(value("DateTimeOriginal"))[:40],
             ))
         return photos
 
@@ -133,31 +153,42 @@ class CommonsPhotos:
         shown = f"{title} {photo.description}".lower()
         return not tokens or any(token in shown for token in tokens)
 
-    def candidates(self, place: str, limit: int = 8, *, months: set[int] | frozenset[int] = frozenset()) -> list[CommonsPhoto]:
+    def candidates(
+        self, place: str, limit: int = 8, *, months: set[int] | frozenset[int] = frozenset(),
+        month_names: list[str] | tuple[str, ...] = (),
+    ) -> list[CommonsPhoto]:
         """Usable photos of a place ("Trevi Fountain, Rome"), best-ranked first, not downloaded.
 
-        Quality images first, then a plain search. Commons search is loose (a "Pantheon,
-        Rome" search also returns Paris), so the caller has a model pick among them.
-        With `months` (the trip's), photos taken then come first and photos dated in
-        another season last: a summer garden on a February page shows a different trip.
+        Commons search is loose (a "Pantheon, Rome" search also returns Paris), so the
+        caller has a model pick among them. With `months` (the trip's season), a photo
+        dated in another season is never offered: February and April are different
+        cities. The trip's month names are searched too ("Spanish Steps" February),
+        which finds the photos taken then; dated in-season photos come first, undated
+        ones after them for the pick to judge.
         """
         name = place.split(",")[0].strip()
+        queries = [f'"{name}" {month}' for month in month_names]
+        queries += [f'"{name}" incategory:Quality_images', place]
         found: list[CommonsPhoto] = []
-        for query in (f'"{name}" incategory:Quality_images', place):
+        for query in queries:
             try:
                 results = self._search(query)
             except Exception:
                 logger.warning("Commons search failed for %r", query, exc_info=True)
-                break
+                continue
             for photo in results:
+                if not self.usable(photo, place):
+                    continue
+                if months and _month(photo.taken) and _month(photo.taken) not in months:
+                    continue
                 # One file per numbered series, so four frescoes from one set do not
                 # crowd out the garden.
-                if self.usable(photo, place) and _series(photo.title) not in {_series(p.title) for p in found}:
+                if _series(photo.title) not in {_series(p.title) for p in found}:
                     found.append(photo)
-            if len(found) >= limit * 2:
+            if sum(1 for p in found if _month(p.taken)) >= limit:
                 break
         if months:
-            found.sort(key=lambda p: 1 if not _month(p.taken) else 0 if _month(p.taken) in months else 2)
+            found.sort(key=lambda p: 0 if _month(p.taken) else 1)
         return found[:limit]
 
     def download(self, photo: CommonsPhoto) -> CommonsPhoto | None:

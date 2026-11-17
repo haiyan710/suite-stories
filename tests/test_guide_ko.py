@@ -203,7 +203,7 @@ class FakeCommons:
     def __init__(self, image_path):
         self.image_path, self.searched = image_path, []
 
-    def candidates(self, place, months=frozenset()):
+    def candidates(self, place, months=frozenset(), month_names=()):
         self.searched.append(place)
         return [_commons(title="Other city fountain.jpg"), _commons()]
 
@@ -244,7 +244,7 @@ def test_the_flow_adds_credited_destination_photos(tmp_path):
 
 
 def test_the_season_comes_from_past_years_on_the_same_dates(monkeypatch):
-    from app.tools.season import SeasonClient, season_name, trip_months
+    from app.tools.season import SeasonClient, month_names, season_months, season_name
     calls = []
 
     def daily(self, lat, lon, start, end):
@@ -258,19 +258,25 @@ def test_the_season_comes_from_past_years_on_the_same_dates(monkeypatch):
     assert [c[0][:4] for c in calls] != ["2030", "2030"] and len(calls) == 2
     assert season["daylight"][0] == {"day": 1, "date": "2030-02-06", "sunrise": "07:17", "sunset": "17:31"}
     assert season["typical"]["high_c"] == 14 and season["typical"]["low_c"] == 7
-    assert season_name(2, -33.9) == "summer" and trip_months(["2027-02-06"]) == {1, 2, 3}
+    assert season_name(2, -33.9) == "summer" and season_months(["2027-02-06"]) == {12, 1, 2}
+    assert season_months(["2027-02-27", "2027-03-02"]) == {12, 1, 2, 3, 4, 5}
+    assert month_names(["2027-02-27", "2027-03-02"]) == ["February", "March"]
     assert SeasonClient().trip_season(["2027-02-06"], lat=None, lon=None) == {
         "month": "February", "season": "winter", "dates": ["2027-02-06"]}
 
 
-def test_commons_photos_from_the_trip_season_come_first(monkeypatch):
+def test_commons_photos_from_another_season_are_never_offered(monkeypatch):
     from app.tools.commons import CommonsPhotos
-    found = [_commons(title="Fountain Square summer.jpg", taken="2019-07-10"),
+    found = [_commons(title="Fountain Square spring.jpg", taken="2009-04-24"),
              _commons(title="Fountain Square undated.jpg"),
+             _commons(title="Fountain Square march.jpg", taken="2022-03-25"),
              _commons(title="Fountain Square winter.jpg", taken="2021-02-03")]
-    monkeypatch.setattr(CommonsPhotos, "_search", lambda self, query, limit=30: found)
-    titles = [p.title for p in CommonsPhotos(Path("/tmp")).candidates("Fountain Square, Harbourtown", months={1, 2, 3})]
-    assert titles == ["File:Fountain Square winter.jpg", "File:Fountain Square undated.jpg", "File:Fountain Square summer.jpg"]
+    queries = []
+    monkeypatch.setattr(CommonsPhotos, "_search", lambda self, query, limit=30: queries.append(query) or found)
+    titles = [p.title for p in CommonsPhotos(Path("/tmp")).candidates(
+        "Fountain Square, Harbourtown", months={12, 1, 2}, month_names=["February"])]
+    assert titles == ["File:Fountain Square winter.jpg", "File:Fountain Square undated.jpg"]
+    assert queries[0] == '"Fountain Square" February'
 
 
 class FakeSeason:
@@ -296,3 +302,9 @@ def test_the_writer_and_the_check_get_the_season(tmp_path):
     assert json.loads(writer.prompts[0][1])["season"]["daylight"][0]["sunset"] == "17:31"
     assert json.loads(seen[0])["season"]["month"] == "February"
     assert "Timed for February (winter): sunset about 17:31–17:31, typically 7–14°C" in outcome.markdown
+
+
+def test_photo_dates_written_in_words_are_read():
+    from app.tools.commons import _month
+    assert [_month(t) for t in ("2010-02-03", "2010:02:03 10:00", "16 August 2013", "Sept 2011", "Marching band", "")] \
+        == [2, 2, 8, 9, 0, 0]

@@ -25,7 +25,7 @@ from ..storage import ConceptRecord, Database, SessionRecord
 from ..tools.documents import Document
 from ..tools.commons import CommonsPhotos
 from ..tools.geo import GeoClient
-from ..tools.season import SeasonClient, trip_months
+from ..tools.season import SeasonClient, month_names, season_months
 from ..tools.web import BRAND, DESTINATION, EDITORIAL_PRESS, PUBLICATION, OFFICIAL
 from ..states import (
     DRAFTABLE_CONCEPTS, PASSED_CONCEPTS, ConceptStatus, ProjectStage, SessionStatus, Verdict, draft_stage,
@@ -2217,8 +2217,11 @@ class EditorialOrchestrator:
             return {}
         self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: finding destination photos")
         dates = list((season or {}).get("dates") or [])
-        months = trip_months(dates) if dates else set()
-        candidates = {place: self._place_photos.candidates(place, months=months) for place in places}
+        months = season_months(dates) if dates else set()
+        names = month_names(dates) if dates else []
+        candidates = {
+            place: self._place_photos.candidates(place, months=months, month_names=names) for place in places
+        }
         candidates = {place: found for place, found in candidates.items() if found}
         if not candidates:
             return {}
