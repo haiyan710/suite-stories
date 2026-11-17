@@ -39,13 +39,32 @@ the bot posts its progress as a log in the Slack thread and ends with:
    decks or plain JPG/PNG/TIFF files) are captioned and placed automatically;
    photos of spaces closed on the trip dates close the page as a "when you
    come back" strip.
-4. **A Korean hotel guide** (on request, a separate output): the same plan
-   as the booking site's short Korean itinerary page (day cards with timed
-   moments, a trip-info box, a travel tip, schema.org data), as HTML in that
-   layout plus JSON. The English draft and layouts are left as they are.
-5. **Options** (on request): "give me 3 options" returns clearly different
+4. **Options** (on request): "give me 3 options" returns clearly different
    angles (A, B, C) in one thread; the team can switch between them, draft
    any of them, or combine two ("B's structure with C's voice").
+
+### Side flow: Korean hotel guide
+
+Steps 1-4 are the main flow, the editorial one. A **side flow** runs beside it
+on request and never changes its state: it reads what the editorial flow has
+produced in the thread and writes its own output.
+
+`hotel guide` (or `호텔 가이드`, `bản tiếng Hàn`) in a thread with an approved
+plan turns it into the booking site's short Korean itinerary page: a header
+and theme card, one card per day with timed moments (오전 / 오후 / 저녁), a
+trip-info box, a travel tip and schema.org `TouristTrip` data, as HTML in that
+layout plus JSON for the site.
+
+- **Timed for the season**: daylight and typical weather on the trip dates
+  (Open-Meteo's free archive, typical values, never a forecast) keep outdoor
+  sights before sunset and nothing out of season in the plan.
+- **Hotel photos** placed once each; spaces closed on the trip dates are left
+  out, and outdoor spaces appear only where the day is spent there.
+- **Destination photos** from Wikimedia Commons under free licences (CC0,
+  public domain, CC BY, CC BY-SA), each credited with author and licence.
+  Only photos taken in the trip's season are offered, and Claude looks at the
+  candidates before picking: an empty slot is preferred to the wrong season.
+- Unknowns are marked `[확인 필요: …]` for the editor. It runs on Claude only.
 
 Each step is checked by a critic before the team sees it, and every fact in
 the output can be traced to a stored source. The copy itself reads as direct
@@ -206,13 +225,15 @@ app/
   states.py                the state machines: session, project stage, concept, verdict, draft, versions
   formatting.py            Markdown → Slack mrkdwn, message splitting, sources, citations
   orchestration/
-    orchestrator.py        the conversational brain: intents, plans, gates, retries, replies
+    orchestrator.py        the conversational brain of the editorial flow: intents, plans, gates, retries, replies
     intents.py             Intent vocabulary
     handoffs.py            typed task/result dataclasses between agents
     planning.py            plans, task briefs, evidence confidence, research compaction
     calendar.py            trip dates, weekdays and Korean holidays, computed in Python
     draft_checks.py        deterministic draft fixes and checks (dates, house style, closures)
     golden.py              non-leaking quality evaluator for the golden test
+  side_flows/
+    korean_guide.py        side flow: the Korean hotel guide (runs beside the editorial flow, own state)
   agents/                  the seven specialists (see table above) + base protocol
   llm/
     base.py                LLMProvider protocol (complete, complete_with_search)
@@ -225,12 +246,14 @@ app/
     pages.py               fetch, URL normalisation, HTML → evidence text
     documents.py           Slack file download, PDF text, photo files and PDF photos, captions
     geo.py                 Photon geocoding + OSRM routing, cached
+    commons.py             freely licensed destination photos from Wikimedia Commons
+    season.py              daylight and typical weather on the trip dates (Open-Meteo archive)
     assets.py              image inventory
   artifacts/
     manager.py             append-only versioned mockups (vNNN), restore by pointer
     layout.py              classic magazine layout with photo slots
     layout_styles.py       side-by-side, photo-first, inline and hybrid layouts
-    guide_ko.py            Korean hotel-guide page (web itinerary format) and its checks
+    guide_ko.py            Korean hotel-guide page renderer and photo placement (side flow)
   storage/
     schema.py, db.py       SQLite schema (in-place migrations) and data access
   prompts/                 methodology, one markdown file per role or step
@@ -304,7 +327,7 @@ use option B / combine B and C: <what from each>    → switch or merge options
 write a sample draft                                → draft with QA verdict
 write a sample draft. <correction>                  → the correction overrides the stored concept
 make the layout / side by side / all four layouts   → HTML layout files in the thread
-hotel guide / 호텔 가이드 / bản tiếng Hàn           → Korean web itinerary page (HTML + JSON)
+hotel guide / 호텔 가이드 / bản tiếng Hàn           → side flow: Korean web itinerary page (HTML + JSON)
 <attach the hotel's PDF deck or photo files>        → facts and photos added as hotel evidence
 Hotel confirmed: <pasted reply>                     → confirms open claims and re-runs editorial
 style rules / style rule: … / banned phrase: a | b  → house style, used by every draft

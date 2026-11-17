@@ -157,12 +157,12 @@ class CommonsPhotos:
         self, place: str, limit: int = 8, *, months: set[int] | frozenset[int] = frozenset(),
         month_names: list[str] | tuple[str, ...] = (),
     ) -> list[CommonsPhoto]:
-        """Usable photos of a place ("Trevi Fountain, Rome"), best-ranked first, not downloaded.
+        """Usable photos of a place ("Park Güell, Barcelona"), best-ranked first, not downloaded.
 
-        Commons search is loose (a "Pantheon, Rome" search also returns Paris), so the
+        Commons search is loose (a "Pantheon" search returns Rome and Paris), so the
         caller has a model pick among them. With `months` (the trip's season), a photo
         dated in another season is never offered: February and April are different
-        cities. The trip's month names are searched too ("Spanish Steps" February),
+        cities. The trip's month names are searched too ("Park Güell" February),
         which finds the photos taken then; dated in-season photos come first, undated
         ones after them for the pick to judge.
         """

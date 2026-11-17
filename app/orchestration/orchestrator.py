@@ -15,7 +15,6 @@ from ..agents import BuilderAgent, CriticAgent, DesignAgent, EditorialAgent, Res
 from ..agents.logistics import LogisticsAgent, LogisticsTask
 from ..artifacts import ArtifactManager
 from ..artifacts.layout import embed_image, render_editorial_html, split_sections
-from ..artifacts.guide_ko import apply_place_photos, dedupe_photos, fill_empty_days, guide_places, guide_check_items, is_outdoor, guide_jsonld, render_guide_html, validate_guide
 from ..artifacts.layout_styles import STYLES, Page, Photo, render_styled_html
 from ..config import Settings
 from ..llm.base import LLMError, LLMMessage, LLMProvider
@@ -25,7 +24,8 @@ from ..storage import ConceptRecord, Database, SessionRecord
 from ..tools.documents import Document
 from ..tools.commons import CommonsPhotos
 from ..tools.geo import GeoClient
-from ..tools.season import SeasonClient, month_names, season_months
+from ..tools.season import SeasonClient
+from ..side_flows import korean_guide
 from ..tools.web import BRAND, DESTINATION, EDITORIAL_PRESS, PUBLICATION, OFFICIAL
 from ..states import (
     DRAFTABLE_CONCEPTS, PASSED_CONCEPTS, ConceptStatus, ProjectStage, SessionStatus, Verdict, draft_stage,
@@ -63,10 +63,6 @@ class OrchestratorOutcome:
     artifact_path: str = ""
     # Local files (e.g. a layout PDF) the Slack layer uploads after the text reply.
     attachments: list[str] = field(default_factory=list)
-
-
-# Commons photos per place that Claude opens to judge the season (downloaded first).
-LOOK_CANDIDATES = 4
 
 
 class EditorialOrchestrator:
@@ -1118,13 +1114,9 @@ class EditorialOrchestrator:
             if option_outcome:  # an option was selected and the request goes on (e.g. a draft)
                 project_state = self._db.project_state(project_row["id"])
                 self._resolve_calendar(user_text, project_state)
-        if (
-            project_row and self._GUIDE_KO.search(self._plain_command(user_text))
-            and (project_state.get("concept") or {}).get("status") in DRAFTABLE_CONCEPTS
-        ):
-            # A side output: the Korean web itinerary page. It reads the thread's concept,
-            # draft and research and writes only concept_state.guide_ko.
-            return self._guide_ko_flow(int(project_row["id"]), project_state, user_text)
+        # Side flow: the Korean hotel guide reads the editorial state and writes its own output.
+        if project_row and korean_guide.matches(self._plain_command(user_text), project_state):
+            return self._korean_guide(int(project_row["id"]), project_state)
         route = self._classify(user_text, history, session, project_state)
         intent = str(route.get("intent", Intent.GENERAL_CONVERSATION)).upper()
         if self._is_project_status_question(user_text):
@@ -2170,268 +2162,14 @@ class EditorialOrchestrator:
             ) + note, concept_id
         return self._format_editorial(editorial, critique, lifecycle, research) + note, concept_id
 
-    # ---- Korean hotel guide (side output) ---------------------------------------------------
-    _GUIDE_KO = re.compile(
-        r"\b(?:hotel|web|site)[ -]guide\b|\bkorean (?:guide|version|page)\b|호텔 ?가이드|"
-        r"한국어 ?(?:가이드|버전|페이지)|tiếng hàn|bản hàn",
-        re.I,
-    )
-
-    def _write_guide(self, payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            response = self._provider.complete(
-                [LLMMessage(role="user", content=json.dumps(payload, ensure_ascii=False))],
-                system=load_prompt("guide_ko"), max_tokens=6000, temperature=0.3,
-            )
-        except AgentCancelled:
-            raise
-        except Exception:
-            logger.warning("Korean guide writing failed", exc_info=True)
-            return {}
-        data = extract_json_block(response.text)
-        return data if isinstance(data, dict) and data.get("days") else {}
-
-    def _trip_season(self, hotel: str, piece_format: dict[str, Any]) -> dict[str, Any]:
-        """Daylight and typical weather on the trip dates, computed, for the guide's timing and tips."""
-        dates = [str(d.get("date")) for d in (piece_format.get("calendar") or {}).get("days") or [] if d.get("date")]
-        if not self._season or not dates:
-            return {}
-        lat = lon = None
-        if self._geo and hotel:
-            try:
-                place = self._geo.geocode(hotel)
-                if place:
-                    lat, lon = place.lat, place.lon
-            except Exception:
-                logger.warning("Hotel geocoding for the season failed", exc_info=True)
-        try:
-            return self._season.trip_season(dates, lat=lat, lon=lon)
-        except Exception:
-            logger.warning("Season lookup failed", exc_info=True)
-            return {}
-
-    def _find_place_photos(self, guide: dict[str, Any], season: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-        """Freely licensed photos of the guide's outside sights: {place: asset}.
-
-        Commons search is loose and a date says little about how a photo looks, so
-        Claude opens the top candidates of each place and picks one in the trip's
-        season, or none. A provider that cannot read images picks from the titles.
-        """
-        places = guide_places(guide)
-        if not self._place_photos or not places:
-            return {}
-        self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: finding destination photos")
-        dates = list((season or {}).get("dates") or [])
-        months = season_months(dates) if dates else set()
-        names = month_names(dates) if dates else []
-        candidates = {
-            place: self._place_photos.candidates(place, months=months, month_names=names) for place in places
-        }
-        candidates = {place: found for place, found in candidates.items() if found}
-        if not candidates:
-            return {}
-        moments = {
-            str(m.get("place") or "").strip(): f"{m.get('title')}: {m.get('text')}"
-            for d in guide.get("days") or [] if isinstance(d, dict)
-            for m in d.get("moments") or [] if isinstance(m, dict)
-        }
-        look = getattr(self._fast_provider, "look_at_images", None)
-        try:
-            if callable(look):
-                # Dates are not enough (late February already looks like spring), so
-                # Claude opens the top candidates and judges the pixels.
-                candidates = {
-                    place: [p for p in (self._place_photos.download(x) for x in found[:LOOK_CANDIDATES]) if p]
-                    for place, found in candidates.items()
-                }
-                listing = [
-                    {"place": place, "moment": moments.get(place, ""), "photos": [
-                        {"i": i, "path": p.local_path, "title": p.title.removeprefix("File:"), "taken": p.taken[:10]}
-                        for i, p in enumerate(found)
-                    ]} for place, found in candidates.items() if found
-                ]
-                paths = [Path(x["path"]) for entry in listing for x in entry["photos"]]
-                text = look(paths, system=load_prompt("guide_place_photos_look"), task=json.dumps({
-                    "trip_dates": dates, "season": (season or {}).get("season"), "places": listing,
-                }, ensure_ascii=False))
-            else:
-                text = self._fast_provider.complete(
-                    [LLMMessage(role="user", content=json.dumps({
-                        "trip": {k: (season or {}).get(k) for k in ("month", "season")}, "places": [
-                        {"place": place, "moment": moments.get(place, ""), "candidates": [
-                            {"i": i, "title": p.title.removeprefix("File:"), "description": p.description[:200],
-                             "taken": p.taken}
-                            for i, p in enumerate(found)
-                        ]} for place, found in candidates.items()
-                    ]}, ensure_ascii=False))],
-                    system=load_prompt("guide_place_photos"), max_tokens=800, temperature=0.0,
-                ).text
-            picks = (extract_json_block(text) or {}).get("picks") or []
-        except AgentCancelled:
-            raise
-        except Exception:
-            logger.warning("Destination photo pick failed", exc_info=True)
-            return {}
-        rejected = [p.get("place") for p in picks if isinstance(p, dict) and str(p.get("pick")) == "-1"]
-        if rejected:
-            logger.info("No in-season photo for %s", rejected)
-        chosen: dict[str, dict[str, Any]] = {}
-        for pick in picks if isinstance(picks, list) else []:
-            place = str((pick or {}).get("place") or "").strip() if isinstance(pick, dict) else ""
-            found = candidates.get(place) or []
-            try:
-                index = int(pick.get("pick"))
-            except (TypeError, ValueError):
-                continue
-            if not 0 <= index < len(found):
-                continue
-            photo = found[index] if found[index].local_path else self._place_photos.download(found[index])
-            if photo:
-                chosen[place] = {
-                    "local_path": photo.local_path, "credit": photo.credit, "evidence": place,
-                    "title": photo.title.removeprefix("File:"), "page_url": photo.page_url,
-                    "artist": photo.artist, "licence": photo.licence, "licence_url": photo.licence_url,
-                    "source": "wikimedia_commons",
-                }
-        return chosen
-
-    def _guide_ko_flow(self, project_id: int, state: dict[str, Any], request: str) -> OrchestratorOutcome:
-        """The Korean web itinerary page, from the thread's concept, draft and research.
-
-        Claude writes it (hotel material may be in the evidence), Python checks its shape,
-        a fast-model check compares it with the plan, and one fix pass follows. Nothing in
-        the English flow changes: the result lives in concept_state.guide_ko.
-        """
-        concept_state = dict(state.get("concept") or {})
-        research = ResearchResult.from_dict(state.get("research") or {})
-        gated = self._gated_research(research)
-        hotel = str(state.get("project", {}).get("hotel", ""))
-        piece_format = dict(concept_state.get("format") or {})
-        nights = int(piece_format.get("nights") or 0) or self._trip_nights or 3
-        photos = {f"p{i}": asset for i, asset in enumerate(self._cleared_images(research), 1)}
-        # Spaces closed on the trip dates never appear; outdoor ones only where the writer
-        # places a moment in them, never to fill a gap.
-        for key in self._closed_space_photos(photos, state):
-            photos.pop(key, None)
-        outdoor = {key for key, asset in photos.items() if is_outdoor(asset)}
-        draft = concept_state.get("sample_draft") or {}
-        concept = concept_state.get("editorial") or {}
-        season = self._trip_season(hotel, piece_format)
-        plan = {
-            "concept": {k: concept.get(k) for k in (
-                "working_title", "editorial_proposition", "strongest_experience", "possible_story_structure",
-                "why_someone_would_want_it", "why_this_property_enables_it",
-            )},
-            "outline": concept_state.get("outline") or {},
-            "draft": {k: draft.get(k) for k in ("headline", "standfirst", "body")} if draft.get("body") else {},
-            "amendments": concept_state.get("amendments") or [],
-        }
-        focus = json.dumps(plan, ensure_ascii=False)
-        payload = {
-            "hotel": hotel, "format": {**piece_format, "nights": nights}, **plan,
-            "stop_notes": concept_state.get("venues") or {},
-            "season": season,
-            "house_style": self._house_style_payload(hotel)["house_style"],
-            "photos": [{"id": key, "shows": str(a.get("evidence") or a.get("page_context") or "")[:200],
-                        "outdoor": key in outdoor}
-                       for key, a in photos.items()],
-            "evidence": compact_research_json(gated.to_dict(), budget_chars=20000, focus_text=focus),
-        }
-        self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: writing the page")
-        guide = self._write_guide(payload)
-        if not guide:
-            return OrchestratorOutcome(
-                "I couldn't write the Korean hotel guide this time. Please try again.", project_id=project_id,
-            )
-        fixes = validate_guide(guide, nights=nights)
-        self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: checking it against the plan")
-        try:
-            response = self._fast_provider.complete(
-                [LLMMessage(role="user", content=json.dumps({
-                    "guide": guide, "plan": plan, "stop_notes": payload["stop_notes"], "season": season,
-                    "house_style": payload["house_style"],
-                    "evidence": compact_research_json(gated.to_dict(), budget_chars=14000, focus_text=focus),
-                }, ensure_ascii=False))],
-                system=load_prompt("guide_ko_check"), max_tokens=2000, temperature=0.0,
-            )
-            check = extract_json_block(response.text)
-            if isinstance(check, dict) and str(check.get("verdict")).upper() == "FIX":
-                fixes += [str(f) for f in check.get("fixes") or [] if str(f).strip()]
-        except AgentCancelled:
-            raise
-        except Exception:
-            logger.warning("Korean guide check failed", exc_info=True)
-        applied = 0
-        if fixes:
-            self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: applying the fixes")
-            revised = self._write_guide({**payload, "previous": guide, "fixes": fixes})
-            if revised and len(validate_guide(revised, nights=nights)) <= len(validate_guide(guide, nights=nights)):
-                guide, applied = revised, len(fixes)
-        hotel_ids = list(photos)
-        guide = dedupe_photos(guide)
-        places = self._find_place_photos(guide, season)
-        place_ids = {place: f"w{i}" for i, place in enumerate(places, 1)}
-        photos.update({place_ids[place]: asset for place, asset in places.items()})
-        guide = fill_empty_days(apply_place_photos(guide, place_ids), hotel_ids, outdoor=outdoor)
-        remaining = validate_guide(guide, nights=nights)
-        checks = guide_check_items(guide)
-        out_dir = (
-            self._settings.artifacts_path / ArtifactManager.safe_slug(hotel or "hotel") / "guides"
-            / time.strftime("%Y%m%d-%H%M%S")
-        )
-        out_dir.mkdir(parents=True, exist_ok=True)
-        slug = ArtifactManager.safe_slug(hotel or "hotel")
-        html_path = out_dir / f"{slug}-hotel-guide-ko.html"
-        json_path = out_dir / f"{slug}-hotel-guide-ko.json"
-        html_path.write_text(render_guide_html(
-            guide, photos=photos, hotel=hotel,
-            note="검토용 초안 · [확인 필요] 표시는 호텔 확인 후 수정 · 호텔 사진: 호텔 제공 이미지"
-                 + (" · 관광지 사진: Wikimedia Commons (각 사진에 저작자·라이선스 표기)" if places else ""),
-        ), encoding="utf-8")
-        credits = {
-            place_ids[place]: {k: a[k] for k in ("title", "page_url", "artist", "licence", "licence_url")} | {"place": place}
-            for place, a in places.items()
-        }
-        json_path.write_text(json.dumps(
-            {"guide": guide, "jsonld": guide_jsonld(guide), "photo_credits": credits}, ensure_ascii=False, indent=2,
-        ), encoding="utf-8")
-        concept_state["guide_ko"] = {
-            "guide": guide, "html": str(html_path), "json": str(json_path), "fixes_applied": applied,
-            "open_issues": remaining, "checks": checks, "nights": nights, "photo_credits": credits,
-            "season": season,
-        }
-        self._db.update_project_state(project_id, "concept", concept_state)
-        used = {str(guide.get("hero_photo") or "")} | {
-            str(x.get("photo") or "") for d in guide.get("days") or [] if isinstance(d, dict)
-            for x in [d, *[m for m in d.get("moments") or [] if isinstance(m, dict)]]
-        }
-        lines = [f"*{guide.get('title')}*", str(guide.get("summary") or "")]
-        notes = [
-            f"• {len(guide.get('days') or [])} days, {len(used & set(hotel_ids))} hotel photos placed"
-            + (f", {len(used & set(place_ids.values()))} destination photos from Wikimedia Commons "
-               "(free licences, credited on the page)" if places else ""),
-            f"• Check: {'passed' if not fixes else f'{applied} fixes applied'}"
-            + (f"; still open: {'; '.join(remaining[:3])}" if remaining else ""),
-        ]
-        if season.get("month"):
-            sunsets = [d["sunset"] for d in season.get("daylight") or []]
-            typical = season.get("typical") or {}
-            notes.append(
-                f"• Timed for {season['month']} ({season.get('season')})"
-                + (f": sunset about {sunsets[0]}–{sunsets[-1]}" if sunsets else "")
-                + (f", typically {typical['low_c']}–{typical['high_c']}°C" if typical else "")
-            )
-        if checks:
-            notes.append(f"• {len(checks)} [확인 필요] items to confirm with the hotel")
-        lines.append("\n".join(notes))
-        lines.append(
-            "_Korean hotel guide below: HTML in the site's itinerary layout and JSON for the site. "
-            "The English draft and layouts in this thread are unchanged._"
-        )
-        return OrchestratorOutcome(
-            "\n\n".join(l for l in lines if l), project_id=project_id,
-            attachments=[str(html_path), str(json_path)],
-        )
+    # ---- side flows (run beside the editorial flow, never change its state) ---------------
+    def _korean_guide(self, project_id: int, state: dict[str, Any]) -> OrchestratorOutcome:
+        result = korean_guide.KoreanGuideFlow(
+            self, settings=self._settings, db=self._db, provider=self._provider,
+            fast_provider=self._fast_provider, place_photos=self._place_photos, season=self._season,
+            geo=self._geo, step=lambda label: self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: " + label),
+        ).run(project_id, state)
+        return OrchestratorOutcome(result.markdown, project_id=project_id, attachments=result.attachments)
 
     # ---- several options, choosing one, combining them --------------------------------------
     OPTION_KEYS = (

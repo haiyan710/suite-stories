@@ -51,8 +51,8 @@ Rules:
   editor adds photos there); never repeat a photo to fill a slot.
 - Destination photos: give a moment held at an outside sight (a landmark,
   museum, church, garden, square, street or viewpoint) a "place": its usual
-  English name with the town, as you would search for a photo of it ("Trevi
-  Fountain, Rome", "Villa d'Este, Tivoli"). The app finds a freely licensed
+  English name with the town, as you would search for a photo of it ("Park
+  Güell, Barcelona", "Montserrat Monastery, Montserrat"). The app finds a freely licensed
   photo of it and leaves that moment's "photo" for it, so give such a moment no
   hotel photo. Leave "place" empty for the hotel, restaurants, bars, shops,
   the airport and transfers.
