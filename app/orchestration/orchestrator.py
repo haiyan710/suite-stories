@@ -15,7 +15,7 @@ from ..agents import BuilderAgent, CriticAgent, DesignAgent, EditorialAgent, Res
 from ..agents.logistics import LogisticsAgent, LogisticsTask
 from ..artifacts import ArtifactManager
 from ..artifacts.layout import embed_image, render_editorial_html, split_sections
-from ..artifacts.guide_ko import dedupe_photos, fill_empty_days, guide_check_items, is_outdoor, guide_jsonld, render_guide_html, validate_guide
+from ..artifacts.guide_ko import apply_place_photos, dedupe_photos, fill_empty_days, guide_places, guide_check_items, is_outdoor, guide_jsonld, render_guide_html, validate_guide
 from ..artifacts.layout_styles import STYLES, Page, Photo, render_styled_html
 from ..config import Settings
 from ..llm.base import LLMError, LLMMessage, LLMProvider
@@ -23,6 +23,7 @@ from ..llm.zai_glm import extract_json_block
 from ..prompts import load_prompt
 from ..storage import ConceptRecord, Database, SessionRecord
 from ..tools.documents import Document
+from ..tools.commons import CommonsPhotos
 from ..tools.geo import GeoClient
 from ..tools.web import BRAND, DESTINATION, EDITORIAL_PRESS, PUBLICATION, OFFICIAL
 from ..states import (
@@ -79,6 +80,7 @@ class EditorialOrchestrator:
         writer_provider: LLMProvider | None = None,
         private_writer: WriterAgent | None = None,
         logistics: LogisticsAgent | None = None,
+        place_photos: CommonsPhotos | None = None,
     ) -> None:
         self._settings = settings
         self._provider = provider
@@ -99,6 +101,10 @@ class EditorialOrchestrator:
             LogisticsAgent(self._fast_provider, GeoClient(
                 photon_url=settings.photon_url, osrm_url=settings.osrm_url, db=db,
             )) if settings.logistics_check else None
+        )
+        # Korean guide destination photos (Wikimedia Commons); off in hand-built test settings.
+        self._place_photos = place_photos or (
+            CommonsPhotos(settings.artifacts_path / "places") if settings.guide_place_photos else None
         )
         self._designer = designer or DesignAgent(provider)
         self._builder = builder or BuilderAgent(provider, self._artifacts)
@@ -2173,6 +2179,61 @@ class EditorialOrchestrator:
         data = extract_json_block(response.text)
         return data if isinstance(data, dict) and data.get("days") else {}
 
+    def _find_place_photos(self, guide: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Freely licensed photos of the guide's outside sights: {place: asset}.
+
+        Commons search is loose, so one fast call picks among each place's candidates
+        (or none); only the picks are downloaded.
+        """
+        places = guide_places(guide)
+        if not self._place_photos or not places:
+            return {}
+        self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: finding destination photos")
+        candidates = {place: self._place_photos.candidates(place) for place in places}
+        candidates = {place: found for place, found in candidates.items() if found}
+        if not candidates:
+            return {}
+        moments = {
+            str(m.get("place") or "").strip(): f"{m.get('title')}: {m.get('text')}"
+            for d in guide.get("days") or [] if isinstance(d, dict)
+            for m in d.get("moments") or [] if isinstance(m, dict)
+        }
+        try:
+            response = self._fast_provider.complete(
+                [LLMMessage(role="user", content=json.dumps({"places": [
+                    {"place": place, "moment": moments.get(place, ""), "candidates": [
+                        {"i": i, "title": p.title.removeprefix("File:"), "description": p.description[:200]}
+                        for i, p in enumerate(found)
+                    ]} for place, found in candidates.items()
+                ]}, ensure_ascii=False))],
+                system=load_prompt("guide_place_photos"), max_tokens=800, temperature=0.0,
+            )
+            picks = (extract_json_block(response.text) or {}).get("picks") or []
+        except AgentCancelled:
+            raise
+        except Exception:
+            logger.warning("Destination photo pick failed", exc_info=True)
+            return {}
+        chosen: dict[str, dict[str, Any]] = {}
+        for pick in picks if isinstance(picks, list) else []:
+            place = str((pick or {}).get("place") or "").strip() if isinstance(pick, dict) else ""
+            found = candidates.get(place) or []
+            try:
+                index = int(pick.get("pick"))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= index < len(found):
+                continue
+            photo = self._place_photos.download(found[index])
+            if photo:
+                chosen[place] = {
+                    "local_path": photo.local_path, "credit": photo.credit, "evidence": place,
+                    "title": photo.title.removeprefix("File:"), "page_url": photo.page_url,
+                    "artist": photo.artist, "licence": photo.licence, "licence_url": photo.licence_url,
+                    "source": "wikimedia_commons",
+                }
+        return chosen
+
     def _guide_ko_flow(self, project_id: int, state: dict[str, Any], request: str) -> OrchestratorOutcome:
         """The Korean web itinerary page, from the thread's concept, draft and research.
 
@@ -2243,7 +2304,12 @@ class EditorialOrchestrator:
             revised = self._write_guide({**payload, "previous": guide, "fixes": fixes})
             if revised and len(validate_guide(revised, nights=nights)) <= len(validate_guide(guide, nights=nights)):
                 guide, applied = revised, len(fixes)
-        guide = fill_empty_days(dedupe_photos(guide), list(photos), outdoor=outdoor)
+        hotel_ids = list(photos)
+        guide = dedupe_photos(guide)
+        places = self._find_place_photos(guide)
+        place_ids = {place: f"w{i}" for i, place in enumerate(places, 1)}
+        photos.update({place_ids[place]: asset for place, asset in places.items()})
+        guide = fill_empty_days(apply_place_photos(guide, place_ids), hotel_ids, outdoor=outdoor)
         remaining = validate_guide(guide, nights=nights)
         checks = guide_check_items(guide)
         out_dir = (
@@ -2256,13 +2322,19 @@ class EditorialOrchestrator:
         json_path = out_dir / f"{slug}-hotel-guide-ko.json"
         html_path.write_text(render_guide_html(
             guide, photos=photos, hotel=hotel,
-            note="검토용 초안 · [확인 필요] 표시는 호텔 확인 후 수정 · 사진: 호텔 제공 이미지",
+            note="검토용 초안 · [확인 필요] 표시는 호텔 확인 후 수정 · 호텔 사진: 호텔 제공 이미지"
+                 + (" · 관광지 사진: Wikimedia Commons (각 사진에 저작자·라이선스 표기)" if places else ""),
         ), encoding="utf-8")
-        json_path.write_text(json.dumps({"guide": guide, "jsonld": guide_jsonld(guide)}, ensure_ascii=False, indent=2),
-                             encoding="utf-8")
+        credits = {
+            place_ids[place]: {k: a[k] for k in ("title", "page_url", "artist", "licence", "licence_url")} | {"place": place}
+            for place, a in places.items()
+        }
+        json_path.write_text(json.dumps(
+            {"guide": guide, "jsonld": guide_jsonld(guide), "photo_credits": credits}, ensure_ascii=False, indent=2,
+        ), encoding="utf-8")
         concept_state["guide_ko"] = {
             "guide": guide, "html": str(html_path), "json": str(json_path), "fixes_applied": applied,
-            "open_issues": remaining, "checks": checks, "nights": nights,
+            "open_issues": remaining, "checks": checks, "nights": nights, "photo_credits": credits,
         }
         self._db.update_project_state(project_id, "concept", concept_state)
         used = {str(guide.get("hero_photo") or "")} | {
@@ -2271,7 +2343,9 @@ class EditorialOrchestrator:
         }
         lines = [f"*{guide.get('title')}*", str(guide.get("summary") or "")]
         notes = [
-            f"• {len(guide.get('days') or [])} days, {len(used & set(photos))} hotel photos placed",
+            f"• {len(guide.get('days') or [])} days, {len(used & set(hotel_ids))} hotel photos placed"
+            + (f", {len(used & set(place_ids.values()))} destination photos from Wikimedia Commons "
+               "(free licences, credited on the page)" if places else ""),
             f"• Check: {'passed' if not fixes else f'{applied} fixes applied'}"
             + (f"; still open: {'; '.join(remaining[:3])}" if remaining else ""),
         ]

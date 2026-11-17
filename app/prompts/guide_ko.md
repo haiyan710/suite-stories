@@ -35,6 +35,13 @@ Rules:
   then each day the photo that fits it best, and a moment a photo only when
   one clearly shows that moment. With fewer photos than slots, leave "" (the
   editor adds photos there); never repeat a photo to fill a slot.
+- Destination photos: give a moment held at an outside sight (a landmark,
+  museum, church, garden, square, street or viewpoint) a "place": its usual
+  English name with the town, as you would search for a photo of it ("Trevi
+  Fountain, Rome", "Villa d'Este, Tivoli"). The app finds a freely licensed
+  photo of it and leaves that moment's "photo" for it, so give such a moment no
+  hotel photo. Leave "place" empty for the hotel, restaurants, bars, shops,
+  the airport and transfers.
 - A photo marked "outdoor" (rooftop, pool, terrace, courtyard, garden) goes
   only on a moment that takes place in that space and only if the plan has
   guests use it on the trip dates; never use one as a day or hero photo for a
@@ -46,7 +53,8 @@ Return JSON only:
  "title": "", "summary": "", "theme": "", "highlights": [],
  "intro": "", "hero_photo": "",
  "days": [{"day": 1, "title": "", "summary": "", "photo": "",
-           "moments": [{"time": "오후", "title": "", "text": "", "photo": ""}]}],
+           "moments": [{"time": "오후", "title": "", "text": "", "photo": "",
+                        "place": ""}]}],
  "info": {"location": "", "duration": "", "highlights": ""},
  "travel_tip": ""}
 

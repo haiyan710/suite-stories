@@ -161,3 +161,83 @@ def test_closed_and_outdoor_photos_are_handled_in_the_flow(tmp_path):
     assert [p["outdoor"] for p in sent] == [False, True, False]
     days = db.project_state(pid)["concept"]["guide_ko"]["guide"]["days"]
     assert [d["photo"] for d in days] == ["p4", "", "", ""]  # only the indoor lounge fills a gap
+
+
+def _commons(title="Fountain Square, Harbourtown.jpg", licence="CC BY-SA 4.0", width=4000, height=2600, **extra):
+    from app.tools.commons import CommonsPhoto
+    base = dict(title=f"File:{title}", page_url="https://commons.wikimedia.org/wiki/File:x", thumb_url="https://x/t.jpg",
+                width=width, height=height, licence=licence, licence_url="https://creativecommons.org/licenses/by-sa/4.0",
+                artist="A. Photographer", description="")
+    base.update(extra)
+    return CommonsPhoto(**base)
+
+
+def test_only_free_landscape_photos_of_the_place_are_usable():
+    from app.tools.commons import CommonsPhotos
+    usable = CommonsPhotos.usable
+    assert usable(_commons(), "Fountain Square, Harbourtown")
+    assert usable(_commons(licence="CC0"), "Fountain Square, Harbourtown")
+    assert not usable(_commons(licence="CC BY-NC 2.0"), "Fountain Square, Harbourtown")
+    assert not usable(_commons(width=900, height=600), "Fountain Square, Harbourtown")
+    assert not usable(_commons(width=2600, height=4000), "Fountain Square, Harbourtown")  # portrait
+    assert not usable(_commons(title="Fountain Square map.jpg"), "Fountain Square, Harbourtown")
+    assert not usable(_commons(title="Old Bridge at night.jpg"), "Fountain Square, Harbourtown")
+    assert usable(_commons(title="IMG_2041.jpg", description="The fountain square at noon"), "Fountain Square, Harbourtown")
+
+
+def test_destination_photos_go_on_their_moment_or_an_empty_day_card():
+    from app.artifacts.guide_ko import apply_place_photos, guide_places
+    g = guide(hero_photo="p1")
+    g["days"][1]["moments"][0].update(place="Fountain Square, Harbourtown")
+    g["days"][2]["photo"] = "p2"
+    g["days"][2]["moments"][0].update(place="Hill Museum, Harbourtown")
+    g["days"][3]["moments"][1].update(place="Fountain Square, Harbourtown")  # same sight again
+    assert guide_places(g) == ["Fountain Square, Harbourtown", "Hill Museum, Harbourtown"]
+    apply_place_photos(g, {"Fountain Square, Harbourtown": "w1", "Hill Museum, Harbourtown": "w2"})
+    assert g["days"][1]["photo"] == "w1"                               # empty card shows the day's sight
+    assert g["days"][2]["photo"] == "p2" and g["days"][2]["moments"][0]["photo"] == "w2"  # hotel photo kept
+    assert g["days"][3]["photo"] == "" and g["days"][3]["moments"][1]["photo"] == ""      # once per page
+
+
+class FakeCommons:
+    def __init__(self, image_path):
+        self.image_path, self.searched = image_path, []
+
+    def candidates(self, place):
+        self.searched.append(place)
+        return [_commons(title="Other city fountain.jpg"), _commons()]
+
+    def download(self, photo):
+        from app.tools.commons import CommonsPhoto
+        return CommonsPhoto(**{**photo.__dict__, "local_path": str(self.image_path)})
+
+
+class PickProvider(CheckProvider):
+    def complete(self, messages, *, system=None, **kwargs):
+        if system and "destination photos" in system:
+            places = json.loads(messages[0].content)["places"]
+            return LLMResponse(text=json.dumps({"picks": [{"place": p["place"], "pick": 1} for p in places]}))
+        return super().complete(messages, system=system, **kwargs)
+
+
+def test_the_flow_adds_credited_destination_photos(tmp_path):
+    from PIL import Image
+    o, db, pid, *_ = _draft_setup(tmp_path, [CritiqueResult(verdict="PASS", reasons=[])])
+    image = tmp_path / "sight.jpg"
+    Image.new("RGB", (1600, 1000)).save(image)
+    concept = dict(db.project_state(pid)["concept"])
+    concept["format"] = {"type": "itinerary", "nights": 3}
+    db.update_project_state(pid, "concept", concept)
+    written = guide(hero_photo="")
+    written["days"][1]["moments"][0].update(title="분수 광장", place="Fountain Square, Harbourtown")
+    o._provider = GuideProvider([written])
+    o._fast_provider = PickProvider({"verdict": "PASS", "fixes": []})
+    o._place_photos = commons = FakeCommons(image)
+    outcome = o.handle_message("hotel guide", user_id="U1", thread_key="C:1")
+    assert commons.searched == ["Fountain Square, Harbourtown"]
+    saved = db.project_state(pid)["concept"]["guide_ko"]
+    assert saved["guide"]["days"][1]["photo"] == "w1"
+    assert saved["photo_credits"]["w1"]["licence"] == "CC BY-SA 4.0"
+    page = Path(saved["html"]).read_text()
+    assert "사진: A. Photographer · CC BY-SA 4.0 · Wikimedia Commons" in page and "사진 출처" in page
+    assert "1 destination photos from Wikimedia Commons" in outcome.markdown
