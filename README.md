@@ -39,7 +39,11 @@ the bot posts its progress as a log in the Slack thread and ends with:
    decks or plain JPG/PNG/TIFF files) are captioned and placed automatically;
    photos of spaces closed on the trip dates close the page as a "when you
    come back" strip.
-4. **Options** (on request): "give me 3 options" returns clearly different
+4. **A Korean hotel guide** (on request, a separate output): the same plan
+   as the booking site's short Korean itinerary page (day cards with timed
+   moments, a trip-info box, a travel tip, schema.org data), as HTML in that
+   layout plus JSON. The English draft and layouts are left as they are.
+5. **Options** (on request): "give me 3 options" returns clearly different
    angles (A, B, C) in one thread; the team can switch between them, draft
    any of them, or combine two ("B's structure with C's voice").
 
@@ -187,7 +191,7 @@ and 2 visual revision cycles.
   question cannot swallow the next request, and "what's the status?" answers
   with the stage and the next things to say.
 - **Methodology lives in prompts.** Editorial behaviour is in
-  `app/prompts/*.md` (22 files). Tune those files before adding code.
+  `app/prompts/*.md` (24 files). Tune those files before adding code.
 
 ---
 
@@ -226,6 +230,7 @@ app/
     manager.py             append-only versioned mockups (vNNN), restore by pointer
     layout.py              classic magazine layout with photo slots
     layout_styles.py       side-by-side, photo-first, inline and hybrid layouts
+    guide_ko.py            Korean hotel-guide page (web itinerary format) and its checks
   storage/
     schema.py, db.py       SQLite schema (in-place migrations) and data access
   prompts/                 methodology, one markdown file per role or step
@@ -299,6 +304,7 @@ use option B / combine B and C: <what from each>    → switch or merge options
 write a sample draft                                → draft with QA verdict
 write a sample draft. <correction>                  → the correction overrides the stored concept
 make the layout / side by side / all four layouts   → HTML layout files in the thread
+hotel guide / 호텔 가이드 / bản tiếng Hàn           → Korean web itinerary page (HTML + JSON)
 <attach the hotel's PDF deck or photo files>        → facts and photos added as hotel evidence
 Hotel confirmed: <pasted reply>                     → confirms open claims and re-runs editorial
 style rules / style rule: … / banned phrase: a | b  → house style, used by every draft
@@ -312,7 +318,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 277 tests run offline with fake LLM providers and fetchers. The live
+The 281 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 ## Limitations

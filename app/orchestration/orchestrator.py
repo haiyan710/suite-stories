@@ -15,6 +15,7 @@ from ..agents import BuilderAgent, CriticAgent, DesignAgent, EditorialAgent, Res
 from ..agents.logistics import LogisticsAgent, LogisticsTask
 from ..artifacts import ArtifactManager
 from ..artifacts.layout import embed_image, render_editorial_html, split_sections
+from ..artifacts.guide_ko import guide_check_items, guide_jsonld, render_guide_html, validate_guide
 from ..artifacts.layout_styles import STYLES, Page, Photo, render_styled_html
 from ..config import Settings
 from ..llm.base import LLMError, LLMMessage, LLMProvider
@@ -1099,6 +1100,13 @@ class EditorialOrchestrator:
             if option_outcome:  # an option was selected and the request goes on (e.g. a draft)
                 project_state = self._db.project_state(project_row["id"])
                 self._resolve_calendar(user_text, project_state)
+        if (
+            project_row and self._GUIDE_KO.search(self._plain_command(user_text))
+            and (project_state.get("concept") or {}).get("status") in DRAFTABLE_CONCEPTS
+        ):
+            # A side output: the Korean web itinerary page. It reads the thread's concept,
+            # draft and research and writes only concept_state.guide_ko.
+            return self._guide_ko_flow(int(project_row["id"]), project_state, user_text)
         route = self._classify(user_text, history, session, project_state)
         intent = str(route.get("intent", Intent.GENERAL_CONVERSATION)).upper()
         if self._is_project_status_question(user_text):
@@ -2143,6 +2151,134 @@ class EditorialOrchestrator:
                 outline, editorial, critique, lifecycle, research, itinerary=bool(self._trip_nights),
             ) + note, concept_id
         return self._format_editorial(editorial, critique, lifecycle, research) + note, concept_id
+
+    # ---- Korean hotel guide (side output) ---------------------------------------------------
+    _GUIDE_KO = re.compile(
+        r"\b(?:hotel|web|site)[ -]guide\b|\bkorean (?:guide|version|page)\b|호텔 ?가이드|"
+        r"한국어 ?(?:가이드|버전|페이지)|tiếng hàn|bản hàn",
+        re.I,
+    )
+
+    def _write_guide(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = self._provider.complete(
+                [LLMMessage(role="user", content=json.dumps(payload, ensure_ascii=False))],
+                system=load_prompt("guide_ko"), max_tokens=6000, temperature=0.3,
+            )
+        except AgentCancelled:
+            raise
+        except Exception:
+            logger.warning("Korean guide writing failed", exc_info=True)
+            return {}
+        data = extract_json_block(response.text)
+        return data if isinstance(data, dict) and data.get("days") else {}
+
+    def _guide_ko_flow(self, project_id: int, state: dict[str, Any], request: str) -> OrchestratorOutcome:
+        """The Korean web itinerary page, from the thread's concept, draft and research.
+
+        Claude writes it (hotel material may be in the evidence), Python checks its shape,
+        a fast-model check compares it with the plan, and one fix pass follows. Nothing in
+        the English flow changes: the result lives in concept_state.guide_ko.
+        """
+        concept_state = dict(state.get("concept") or {})
+        research = ResearchResult.from_dict(state.get("research") or {})
+        gated = self._gated_research(research)
+        hotel = str(state.get("project", {}).get("hotel", ""))
+        piece_format = dict(concept_state.get("format") or {})
+        nights = int(piece_format.get("nights") or 0) or self._trip_nights or 3
+        photos = {f"p{i}": asset for i, asset in enumerate(self._cleared_images(research), 1)}
+        draft = concept_state.get("sample_draft") or {}
+        concept = concept_state.get("editorial") or {}
+        plan = {
+            "concept": {k: concept.get(k) for k in (
+                "working_title", "editorial_proposition", "strongest_experience", "possible_story_structure",
+                "why_someone_would_want_it", "why_this_property_enables_it",
+            )},
+            "outline": concept_state.get("outline") or {},
+            "draft": {k: draft.get(k) for k in ("headline", "standfirst", "body")} if draft.get("body") else {},
+            "amendments": concept_state.get("amendments") or [],
+        }
+        focus = json.dumps(plan, ensure_ascii=False)
+        payload = {
+            "hotel": hotel, "format": {**piece_format, "nights": nights}, **plan,
+            "stop_notes": concept_state.get("venues") or {},
+            "house_style": self._house_style_payload(hotel)["house_style"],
+            "photos": [{"id": key, "shows": str(a.get("evidence") or a.get("page_context") or "")[:200]}
+                       for key, a in photos.items()],
+            "evidence": compact_research_json(gated.to_dict(), budget_chars=20000, focus_text=focus),
+        }
+        self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: writing the page")
+        guide = self._write_guide(payload)
+        if not guide:
+            return OrchestratorOutcome(
+                "I couldn't write the Korean hotel guide this time. Please try again.", project_id=project_id,
+            )
+        fixes = validate_guide(guide, nights=nights)
+        self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: checking it against the plan")
+        try:
+            response = self._fast_provider.complete(
+                [LLMMessage(role="user", content=json.dumps({
+                    "guide": guide, "plan": plan, "stop_notes": payload["stop_notes"],
+                    "house_style": payload["house_style"],
+                    "evidence": compact_research_json(gated.to_dict(), budget_chars=14000, focus_text=focus),
+                }, ensure_ascii=False))],
+                system=load_prompt("guide_ko_check"), max_tokens=2000, temperature=0.0,
+            )
+            check = extract_json_block(response.text)
+            if isinstance(check, dict) and str(check.get("verdict")).upper() == "FIX":
+                fixes += [str(f) for f in check.get("fixes") or [] if str(f).strip()]
+        except AgentCancelled:
+            raise
+        except Exception:
+            logger.warning("Korean guide check failed", exc_info=True)
+        applied = 0
+        if fixes:
+            self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: applying the fixes")
+            revised = self._write_guide({**payload, "previous": guide, "fixes": fixes})
+            if revised and len(validate_guide(revised, nights=nights)) <= len(validate_guide(guide, nights=nights)):
+                guide, applied = revised, len(fixes)
+        remaining = validate_guide(guide, nights=nights)
+        checks = guide_check_items(guide)
+        out_dir = (
+            self._settings.artifacts_path / ArtifactManager.safe_slug(hotel or "hotel") / "guides"
+            / time.strftime("%Y%m%d-%H%M%S")
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        slug = ArtifactManager.safe_slug(hotel or "hotel")
+        html_path = out_dir / f"{slug}-hotel-guide-ko.html"
+        json_path = out_dir / f"{slug}-hotel-guide-ko.json"
+        html_path.write_text(render_guide_html(
+            guide, photos=photos, hotel=hotel,
+            note="검토용 초안 · [확인 필요] 표시는 호텔 확인 후 수정 · 사진: 호텔 제공 이미지",
+        ), encoding="utf-8")
+        json_path.write_text(json.dumps({"guide": guide, "jsonld": guide_jsonld(guide)}, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+        concept_state["guide_ko"] = {
+            "guide": guide, "html": str(html_path), "json": str(json_path), "fixes_applied": applied,
+            "open_issues": remaining, "checks": checks, "nights": nights,
+        }
+        self._db.update_project_state(project_id, "concept", concept_state)
+        used = {str(guide.get("hero_photo") or "")} | {
+            str(x.get("photo") or "") for d in guide.get("days") or [] if isinstance(d, dict)
+            for x in [d, *[m for m in d.get("moments") or [] if isinstance(m, dict)]]
+        }
+        lines = [f"*{guide.get('title')}*", str(guide.get("summary") or "")]
+        notes = [
+            f"• {len(guide.get('days') or [])} days, {len(used & set(photos))} hotel photos placed",
+            f"• Check: {'passed' if not fixes else f'{applied} fixes applied'}"
+            + (f"; still open: {'; '.join(remaining[:3])}" if remaining else ""),
+        ]
+        if checks:
+            notes.append(f"• {len(checks)} [확인 필요] items to confirm with the hotel")
+        lines.append("\n".join(notes))
+        lines.append(
+            "_Korean hotel guide below: HTML in the site's itinerary layout and JSON for the site. "
+            "The English draft and layouts in this thread are unchanged._"
+        )
+        return OrchestratorOutcome(
+            "\n\n".join(l for l in lines if l), project_id=project_id,
+            attachments=[str(html_path), str(json_path)],
+        )
 
     # ---- several options, choosing one, combining them --------------------------------------
     OPTION_KEYS = (

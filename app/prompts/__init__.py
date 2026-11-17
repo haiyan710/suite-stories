@@ -27,6 +27,8 @@ _FILES = {
     "layout_images": "layout_images.md",
     "dining_picks": "dining_picks.md",
     "venue_notes": "venue_notes.md",
+    "guide_ko": "guide_ko.md",
+    "guide_ko_check": "guide_ko_check.md",
     "guest_experience": "guest_experience.md",
     "humanizer": "humanizer.md",
     "draft_fixes": "draft_fixes.md",
