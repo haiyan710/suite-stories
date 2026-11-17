@@ -17,6 +17,9 @@ calm, concrete voice that sells without hype.
 - Pluggable LLM backend: the local Claude Code CLI (runs on a logged-in Claude
   account, no API key) or GLM through Z.ai's Anthropic-compatible API
 - Free OpenStreetMap services for travel times (Photon geocoding, OSRM routing)
+- Free, keyless web data for the Korean guide side flow: Wikimedia Commons
+  (freely licensed destination photos) and Open-Meteo (daylight and typical
+  weather on the trip dates)
 
 ---
 
@@ -210,7 +213,7 @@ and 2 visual revision cycles.
   question cannot swallow the next request, and "what's the status?" answers
   with the stage and the next things to say.
 - **Methodology lives in prompts.** Editorial behaviour is in
-  `app/prompts/*.md` (24 files). Tune those files before adding code.
+  `app/prompts/*.md` (26 files). Tune those files before adding code.
 
 ---
 
@@ -292,6 +295,8 @@ users can reply without mentioning it.
   and the other agents use `CLAUDE_CLI_MODEL`.
 - `zai` uses GLM through Z.ai (`ZAI_API_KEY`). `WRITER_PROVIDER=zai` lets GLM
   write drafts from public evidence, with a Claude fallback.
+- GLM is optional. With `WRITER_PROVIDER=claude_cli` every step runs on the
+  Claude CLI. The Korean guide side flow always runs on Claude.
 
 All options and their defaults are listed in `.env.example`.
 
@@ -341,7 +346,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 292 tests run offline with fake LLM providers and fetchers. The live
+The 294 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 ## Limitations
