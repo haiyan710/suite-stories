@@ -64,6 +64,10 @@ def _name_tokens(place: str) -> set[str]:
     return {w for w in re.findall(r"[^\W\d_]{3,}", name.lower()) if w not in _STOPWORDS}
 
 
+def _series(title: str) -> str:
+    return re.sub(r"[\d\W_]+", " ", title.lower()).strip()
+
+
 class CommonsPhotos:
     def __init__(self, cache_dir: Path, *, timeout: float = 20.0) -> None:
         self._cache_dir = Path(cache_dir)
@@ -84,7 +88,7 @@ class CommonsPhotos:
         finally:
             self._last_request = time.monotonic()
 
-    def _search(self, query: str, limit: int = 12) -> list[CommonsPhoto]:
+    def _search(self, query: str, limit: int = 30) -> list[CommonsPhoto]:
         data = self._get(API_URL, {
             "action": "query", "format": "json", "generator": "search", "gsrsearch": query,
             "gsrnamespace": 6, "gsrlimit": limit, "prop": "imageinfo",
@@ -122,7 +126,7 @@ class CommonsPhotos:
         shown = f"{title} {photo.description}".lower()
         return not tokens or any(token in shown for token in tokens)
 
-    def candidates(self, place: str, limit: int = 6) -> list[CommonsPhoto]:
+    def candidates(self, place: str, limit: int = 8) -> list[CommonsPhoto]:
         """Usable photos of a place ("Trevi Fountain, Rome"), best-ranked first, not downloaded.
 
         Quality images first, then a plain search. Commons search is loose (a "Pantheon,
@@ -137,7 +141,9 @@ class CommonsPhotos:
                 logger.warning("Commons search failed for %r", query, exc_info=True)
                 break
             for photo in results:
-                if self.usable(photo, place) and all(p.title != photo.title for p in found):
+                # One file per numbered series, so four frescoes from one set do not
+                # crowd out the garden.
+                if self.usable(photo, place) and _series(photo.title) not in {_series(p.title) for p in found}:
                     found.append(photo)
             if len(found) >= limit:
                 break
