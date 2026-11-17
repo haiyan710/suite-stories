@@ -15,7 +15,7 @@ from ..agents import BuilderAgent, CriticAgent, DesignAgent, EditorialAgent, Res
 from ..agents.logistics import LogisticsAgent, LogisticsTask
 from ..artifacts import ArtifactManager
 from ..artifacts.layout import embed_image, render_editorial_html, split_sections
-from ..artifacts.guide_ko import dedupe_photos, guide_check_items, guide_jsonld, render_guide_html, validate_guide
+from ..artifacts.guide_ko import dedupe_photos, fill_empty_days, guide_check_items, guide_jsonld, render_guide_html, validate_guide
 from ..artifacts.layout_styles import STYLES, Page, Photo, render_styled_html
 from ..config import Settings
 from ..llm.base import LLMError, LLMMessage, LLMProvider
@@ -2237,7 +2237,7 @@ class EditorialOrchestrator:
             revised = self._write_guide({**payload, "previous": guide, "fixes": fixes})
             if revised and len(validate_guide(revised, nights=nights)) <= len(validate_guide(guide, nights=nights)):
                 guide, applied = revised, len(fixes)
-        guide = dedupe_photos(guide)
+        guide = fill_empty_days(dedupe_photos(guide), list(photos))
         remaining = validate_guide(guide, nights=nights)
         checks = guide_check_items(guide)
         out_dir = (

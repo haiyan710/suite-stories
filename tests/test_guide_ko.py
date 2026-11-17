@@ -103,13 +103,25 @@ def test_a_guide_request_without_a_concept_goes_the_normal_way(tmp_path: Path):
     assert not outcome.attachments
 
 
-def test_a_photo_is_used_once_per_day():
+def test_a_photo_is_used_once_on_the_whole_page():
     from app.artifacts.guide_ko import dedupe_photos
-    g = guide(hero_photo="p9")
-    g["days"][1]["photo"] = "p2"
-    g["days"][1]["moments"][0]["photo"] = "p2"
-    g["days"][1]["moments"][1]["photo"] = "p3"
-    g["days"][2]["moments"][0]["photo"] = "p9"
+    g = guide(hero_photo="p1")
+    placements = [("p1", ["", "p3"]), ("p3", ["p3", ""]), ("p1", ["", ""]), ("p3", ["", "p3"])]
+    for day, (photo, moments) in zip(g["days"], placements):
+        day["photo"] = photo
+        for moment, m in zip(day["moments"], moments):
+            moment["photo"] = m
     dedupe_photos(g)
-    assert g["days"][1]["moments"][0]["photo"] == "" and g["days"][1]["moments"][1]["photo"] == "p3"
-    assert g["days"][2]["moments"][0]["photo"] == ""
+    shown = [g["hero_photo"]] + [d["photo"] for d in g["days"]] + [m["photo"] for d in g["days"] for m in d["moments"]]
+    filled = [x for x in shown if x]
+    assert filled == ["p1", "p3"] and len(filled) == len(set(filled))
+    assert g["days"][0]["photo"] == "" and g["days"][1]["photo"] == "p3"
+
+
+def test_unused_hotel_photos_fill_empty_day_cards_without_repeats():
+    from app.artifacts.guide_ko import dedupe_photos, fill_empty_days
+    g = guide(hero_photo="p1")
+    g["days"][0]["photo"] = "p1"
+    g["days"][1]["photo"] = "p3"
+    fill_empty_days(dedupe_photos(g), ["p1", "p2", "p3", "p4"])
+    assert [d["photo"] for d in g["days"]] == ["p2", "p3", "p4", ""]

@@ -30,9 +30,11 @@ Rules:
   with a time label: "오전", "오후" or "저녁" (in that order within a day).
   The hotel appears every day. Day 1 starts with arrival and check-in; the last
   day ends with check-out and the airport.
-- Photos: use only PHOTOS ids. Give each day the photo that best fits it and a
-  moment a photo only when one clearly shows that moment. Leave "" otherwise;
-  never reuse one photo for two moments of the same day.
+- Photos: use only PHOTOS ids, and each id at most once on the whole page
+  (hero, days and moments together). Give the hero the most inviting photo,
+  then each day the photo that fits it best, and a moment a photo only when
+  one clearly shows that moment. With fewer photos than slots, leave "" (the
+  editor adds photos there); never repeat a photo to fill a slot.
 
 Return JSON only:
 
