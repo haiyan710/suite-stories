@@ -47,7 +47,9 @@ the bot posts its progress as a log in the Slack thread and ends with:
    any of them, or combine two ("B's structure with C's voice"). Three
    independent judges (the traveller, the evidence, the editor) score the
    options; their pick becomes active, and what it could take from another
-   option is one "combine as recommended" away.
+   option is one "combine as recommended" away. Each option holds exactly one
+   plan of the trip's length: a concept that slips a second plan in, or runs
+   past the last day, is sent back for repair before the critic sees it.
 
 ### Side flow: Korean hotel guide
 
