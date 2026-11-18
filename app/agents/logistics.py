@@ -59,6 +59,7 @@ class LogisticsTask:
     hotel: str
     plan: dict[str, Any]
     segment: str = ""
+    days: int = 0  # the trip's length in days; later days in the plan text are not part of it
 
 
 @dataclass
@@ -141,6 +142,11 @@ class LogisticsAgent:
 
     def run(self, task: LogisticsTask) -> LogisticsResult:
         days = self._extract(task)
+        if task.days:
+            extra = [d.get("day") for d in days if int(d.get("day") or 0) > task.days]
+            if extra:
+                logger.warning("Logistics: ignoring days %s beyond the %d-day trip", extra, task.days)
+            days = [d for d in days if int(d.get("day") or 0) <= task.days]
         if not days:
             return LogisticsResult(status="unavailable", issues=["The plan's stops could not be read."])
         hotel = self._geo.geocode(task.hotel)

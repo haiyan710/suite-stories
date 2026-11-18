@@ -2365,7 +2365,9 @@ class EditorialOrchestrator:
                 f"{o['label']}: {o.get('title') or o['editorial'].get('editorial_proposition', '')}" for o in options
             )
             self._option_note = (
-                f"OPTIONS: this is option {label} of {self._option_count} for the same request. "
+                f"OPTIONS: this is option {label} of {self._option_count} for the same request. Write exactly "
+                "ONE concept with ONE plan here; the other options are written in separate runs, so never put "
+                "several options or alternative plans inside this one. "
                 + (f"Take an angle clearly different from the earlier options ({earlier}): a different "
                    "spine, structure or reader promise, not a rename." if options else
                    "Later options will take other angles, so commit to one clear angle.")
@@ -2620,7 +2622,7 @@ class EditorialOrchestrator:
             # questions instead of a finished proposition, while
             # no_strong_direction is a valid terminal outcome.
             contract_gaps = (
-                self._editorial_contract_gaps(editorial)
+                self._editorial_contract_gaps(editorial) + self._itinerary_shape_gaps(editorial)
                 if editorial.status == "complete"
                 else []
             )
@@ -2639,11 +2641,14 @@ class EditorialOrchestrator:
 
             if contract_gaps:
                 retry_concept = editorial.to_dict()
-                prior_failure = (
-                    "The candidate was structurally incomplete and omitted required fields: "
-                    + ", ".join(contract_gaps)
-                    + ". The next candidate must fully explain the experience, desire, property advantage, story, and visual device."
-                )
+                shape = [g for g in contract_gaps if " " in g]
+                missing = [g for g in contract_gaps if " " not in g]
+                prior_failure = " ".join(filter(None, [
+                    ("The candidate was structurally incomplete and omitted required fields: " + ", ".join(missing)
+                     + ". The next candidate must fully explain the experience, desire, property advantage, story, "
+                     "and visual device.") if missing else "",
+                    ("The candidate broke the plan's shape: " + "; ".join(shape) + ".") if shape else "",
+                ]))
                 if repair_attempted:
                     break
                 repair_attempted = True
@@ -2843,6 +2848,26 @@ class EditorialOrchestrator:
             "visual_storytelling_device": editorial.visual_storytelling_device,
         }
         return [name for name, value in required.items() if not str(value).strip()]
+
+    _DAY_HEADING = re.compile(r"(?im)^[\s#*>_-]*day\s*(\d{1,2})\b")
+
+    def _itinerary_shape_gaps(self, editorial: EditorialResult) -> list[str]:
+        """An itinerary concept must hold one plan of the trip's length.
+
+        Asked for "option A of 2", the editorial once wrote both options' plans into one
+        concept; the logistics check then read an 8-day trip and the reply warned about a
+        Day 6 that the 3-night plan never had.
+        """
+        if not self._trip_nights:
+            return []
+        days = [int(n) for n in self._DAY_HEADING.findall(str(editorial.possible_story_structure or ""))]
+        restarts = sum(1 for i, day in enumerate(days) if day == 1 and max(days[:i], default=0) >= 2)
+        if restarts:
+            return [f"the story structure holds {restarts + 1} day-by-day plans; write one plan only"]
+        length = self._trip_nights + 1
+        if days and max(days) > length:
+            return [f"the story structure runs to Day {max(days)}; the trip has {length} days ({self._trip_nights} nights)"]
+        return []
 
     @staticmethod
     def _central_evidence_blockers(critique: Any) -> list[str]:
@@ -3455,6 +3480,7 @@ class EditorialOrchestrator:
         try:
             result = self._call("logistics", self._logistics.run, LogisticsTask(
                 hotel=hotel, plan=plan, segment=self._segment,
+                days=self._trip_nights + 1 if self._trip_nights else 0,
             ), project_id, step_id="logistics")
         except AgentCancelled:
             raise

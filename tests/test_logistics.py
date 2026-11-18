@@ -124,3 +124,10 @@ def test_a_train_day_trip_is_left_to_the_timetable_not_flagged_as_a_long_car_rid
     rail = [leg for leg in result.legs if "Old Town" in (leg.origin, leg.destination)]
     assert len(rail) == 2 and all(leg.verdict == "unknown" and "timetable" in leg.note for leg in rail)
     assert not any("long ride" in issue or "Old Town" in issue for issue in result.issues)
+
+
+def test_days_beyond_the_trip_are_not_checked():
+    days = [{"day": n, "stops": [stop("Hotel", "09:00", "hotel"), stop("Park", "10:00", "sight")]} for n in (1, 2, 6)]
+    result = LogisticsAgent(StopsProvider(days), FakeGeo()).run(LogisticsTask(hotel="Hotel", plan={}, days=4))
+    assert {leg.day for leg in result.legs} == {1, 2}
+    assert not any("Day 6" in issue for issue in result.issues)

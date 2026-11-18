@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from app.artifacts import ArtifactManager
@@ -1916,3 +1917,31 @@ def test_three_options_are_kept_distinct_and_can_be_selected_and_combined(tmp_pa
     concept = db.project_state(pid)["concept"]
     assert concept["active_option"] == "D" and concept["editorial"]["working_title"] == "Delta"
     assert [x["label"] for x in concept["options"]] == ["A", "B", "C", "D"]
+
+
+def test_an_itinerary_concept_with_two_plans_is_repaired_to_one(tmp_path: Path):
+    two_plans = replace(_option_editorial("Alpha"), possible_story_structure=(
+        "OPTION A: CITY\nDay 1: arrive\nDay 2: river\nDay 3: market\nDay 4: leave\n"
+        "OPTION B: GREEN\nDay 1: arrive\nDay 2: park\nDay 3: museum\nDay 4: leave"
+    ))
+    one_plan = replace(_option_editorial("Alpha"), possible_story_structure=(
+        "Day 1: arrive\nDay 2: river\nDay 3: market\nDay 4: leave"
+    ))
+    o, db, _r, editorial, _d, _b, critic = setup_orchestrator(
+        tmp_path, ['{"intent":"RESEARCH_PROPERTY","hotel":"Hotel X"}'], [two_plans, one_plan],
+    )
+    outcome = o.handle_message("Research Hotel X, 3-night trip", user_id="U1", thread_key="C:twoplans")
+    assert len(editorial.tasks) == 2 and len(critic.tasks) == 1
+    assert "holds 2 day-by-day plans; write one plan only" in editorial.tasks[1].constraints[0]
+    assert db.project_state(outcome.project_id)["concept"]["status"] == "shortlisted"
+
+
+def test_plan_shape_gaps_count_restarts_and_length(tmp_path: Path):
+    o, *_ = setup_orchestrator(tmp_path, [])
+    o._trip_nights = 3
+    gaps = lambda text: o._itinerary_shape_gaps(replace(_option_editorial("A"), possible_story_structure=text))
+    assert gaps("Day 1: a\nDay 2: b\nDay 3: c\nDay 4: d") == []
+    assert "runs to Day 6" in gaps("Day 1: a\nDay 2: b\nDay 6: c")[0]
+    assert gaps("Notes: Day 1 opens with the info line.\nDay 1: a\nDay 2: b") == []  # not at a line start
+    o._trip_nights = 0
+    assert gaps("Day 1\nDay 2\nDay 1\nDay 2") == []
