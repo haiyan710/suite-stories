@@ -31,6 +31,8 @@ _FILES = {
     "guide_ko_check": "guide_ko_check.md",
     "guide_place_photos": "guide_place_photos.md",
     "guide_place_photos_look": "guide_place_photos_look.md",
+    "lesson_generalize": "lesson_generalize.md",
+    "verify_fixes": "verify_fixes.md",
     "guest_experience": "guest_experience.md",
     "humanizer": "humanizer.md",
     "draft_fixes": "draft_fixes.md",

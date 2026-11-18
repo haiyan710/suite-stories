@@ -35,6 +35,7 @@ from ..artifacts.guide_ko import (
 from ..config import Settings
 from ..llm.base import LLMMessage, LLMProvider
 from ..llm.zai_glm import extract_json_block
+from ..orchestration.fix_check import verify_fixes
 from ..orchestration.handoffs import ResearchResult
 from ..orchestration.planning import compact_research_json
 from ..prompts import load_prompt
@@ -74,7 +75,7 @@ class EditorialHost(Protocol):
     def _cleared_images(self, research: ResearchResult) -> list[dict[str, Any]]: ...
     def _closed_space_photos(self, photos: dict[str, Any], state: dict[str, Any]) -> list[str]: ...
     def _gated_research(self, research: ResearchResult) -> ResearchResult: ...
-    def _house_style_payload(self, hotel: str) -> dict[str, Any]: ...
+    def _house_style_payload(self, hotel: str, target: str = ...) -> dict[str, Any]: ...
 
 
 class KoreanGuideFlow:
@@ -255,7 +256,7 @@ class KoreanGuideFlow:
             "hotel": hotel, "format": {**piece_format, "nights": nights}, **plan,
             "stop_notes": concept_state.get("venues") or {},
             "season": season,
-            "house_style": self._host._house_style_payload(hotel)["house_style"],
+            "house_style": self._host._house_style_payload(hotel, "guide")["house_style"],
             "photos": [{"id": key, "shows": str(a.get("evidence") or a.get("page_context") or "")[:200],
                         "outdoor": key in outdoor}
                        for key, a in photos.items()],
@@ -268,6 +269,7 @@ class KoreanGuideFlow:
                 "I couldn't write the Korean hotel guide this time. Please try again.", 
             )
         fixes = validate_guide(guide, nights=nights)
+        refuted: list[dict[str, str]] = []
         self._step("checking it against the plan")
         try:
             response = self._fast_provider.complete(
@@ -280,7 +282,18 @@ class KoreanGuideFlow:
             )
             check = extract_json_block(response.text)
             if isinstance(check, dict) and str(check.get("verdict")).upper() == "FIX":
-                fixes += [str(f) for f in check.get("fixes") or [] if str(f).strip()]
+                suggested = [str(f) for f in check.get("fixes") or [] if str(f).strip()]
+                if suggested and self._settings.verify_fixes:
+                    # The check's fixes are tested from the other side; Python's shape fixes are not.
+                    self._step("double-checking the suggested fixes")
+                    verified = verify_fixes(
+                        self._fast_provider, suggested, text=json.dumps(guide, ensure_ascii=False),
+                        evidence=compact_research_json(gated.to_dict(), budget_chars=14000, focus_text=focus),
+                        context={"plan": plan, "stop_notes": payload["stop_notes"], "season": season,
+                                 "house_style": payload["house_style"]},
+                    )
+                    suggested, refuted = verified.kept, verified.refuted
+                fixes += suggested
         except AgentCancelled:
             raise
         except Exception:
@@ -322,6 +335,7 @@ class KoreanGuideFlow:
         concept_state["guide_ko"] = {
             "guide": guide, "html": str(html_path), "json": str(json_path), "fixes_applied": applied,
             "open_issues": remaining, "checks": checks, "nights": nights, "photo_credits": credits,
+            "refuted_fixes": refuted,
             "season": season,
         }
         self._db.update_project_state(project_id, "concept", concept_state)
@@ -335,7 +349,9 @@ class KoreanGuideFlow:
             + (f", {len(used & set(place_ids.values()))} destination photos from Wikimedia Commons "
                "(free licences, credited on the page)" if places else ""),
             f"• Check: {'passed' if not fixes else f'{applied} fixes applied'}"
-            + (f"; still open: {'; '.join(remaining[:3])}" if remaining else ""),
+            + (f"; still open: {'; '.join(remaining[:3])}" if remaining else "")
+            + (f"; {len(refuted)} suggested fix{'es' if len(refuted) > 1 else ''} dropped after a second check"
+               if refuted else ""),
         ]
         if season.get("month"):
             sunsets = [d["sunset"] for d in season.get("daylight") or []]

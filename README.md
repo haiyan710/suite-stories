@@ -70,7 +70,14 @@ layout plus JSON for the site.
 - Unknowns are marked `[확인 필요: …]` for the editor. It runs on Claude only.
 
 Each step is checked by a critic before the team sees it, and every fact in
-the output can be traced to a stored source. The copy itself reads as direct
+the output can be traced to a stored source. The critic's suggested fixes are
+themselves checked from the other side before they are applied, so a fix that
+would remove a supported fact or undo the team's correction is dropped.
+
+The team's feedback is kept, not only applied once: `feedback: …` in Slack
+becomes one general rule with its reason, used by the flows it concerns from
+the next run on. A rule that contradicts an earlier one waits for the team to
+choose, and the full history stays in the database. The copy itself reads as direct
 recommendations: sources stay in the database, not in the text. Where only the
 hotel can answer (a dish from the winter menu, a group table), the draft
 carries an `[ASK <contact>: …]` note for the editor.
@@ -213,7 +220,7 @@ and 2 visual revision cycles.
   question cannot swallow the next request, and "what's the status?" answers
   with the stage and the next things to say.
 - **Methodology lives in prompts.** Editorial behaviour is in
-  `app/prompts/*.md` (26 files). Tune those files before adding code.
+  `app/prompts/*.md` (28 files). Tune those files before adding code.
 
 ---
 
@@ -232,6 +239,7 @@ app/
     intents.py             Intent vocabulary
     handoffs.py            typed task/result dataclasses between agents
     planning.py            plans, task briefs, evidence confidence, research compaction
+    fix_check.py           second check of a critic's suggested fixes before they are applied
     calendar.py            trip dates, weekdays and Korean holidays, computed in Python
     draft_checks.py        deterministic draft fixes and checks (dates, house style, closures)
     golden.py              non-leaking quality evaluator for the golden test
@@ -336,6 +344,8 @@ hotel guide / 호텔 가이드 / bản tiếng Hàn           → side flow: Kor
 <attach the hotel's PDF deck or photo files>        → facts and photos added as hotel evidence
 Hotel confirmed: <pasted reply>                     → confirms open claims and re-runs editorial
 style rules / style rule: … / banned phrase: a | b  → house style, used by every draft
+feedback: <what was wrong>                          → one general lesson (with why) for the next runs
+lessons / lessons history / remove lesson #N        → the lessons and their change history
 hotel contact: <name> / editor: <name>              → who the [ASK] notes are for
 critique this / show workflow / use v1 again
 ```
@@ -346,7 +356,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 294 tests run offline with fake LLM providers and fetchers. The live
+The 302 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 ## Limitations

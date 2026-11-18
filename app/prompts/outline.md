@@ -11,7 +11,8 @@ it), the outline must already obey that restriction: write the safe
 version, not the original. The reader-facing fields (title, opening_hook,
 insider_notes) never name a source ("per the hotel", "guests say", a
 publication): soften or make the claim concrete instead. FORMAT and
-house_style rules apply.
+house_style rules apply (including its "Lesson #" entries, learned from the
+team's feedback; each Why says when it applies).
 
 When VENUES is present, each day's beats use the stop's hook (why go), never
 place a stop on one of its closed_days, and keep hotel_spaces that are not

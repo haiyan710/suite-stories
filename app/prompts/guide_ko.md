@@ -22,7 +22,8 @@ Rules:
   dishes that are not there. Where the plan needs something the inputs lack,
   write "[확인 필요: 무엇]" in the sentence instead of guessing.
 - Never name a source ("호텔에 따르면", "리뷰에 따르면", a publication). Write the
-  recommendation directly. Follow HOUSE STYLE.
+  recommendation directly. Follow HOUSE STYLE, including its "Lesson #"
+  entries (the team's feedback on earlier pages; each Why says when it applies).
 - Promotional: no drawbacks; an inconvenience only as a helpful tip.
 - Booking-site benefits (조식, 크레딧, 업그레이드) are never the hotel's offers.
 - Short sentences. A day summary is one sentence; a moment text is one or two

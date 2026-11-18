@@ -17,6 +17,8 @@ Flag, one instruction each:
   after that day's sunset; a terrace, rooftop or pool scene out of season; a
   seasonal event or menu that is not on these dates; a travel tip that ignores
   the season (darkness, cold, heat, rain).
+- Anything that goes against a "Lesson #" entry in HOUSE STYLE (the team's
+  feedback on earlier pages).
 - A named source ("호텔에 따르면", "리뷰", a publication) or a banned phrase.
 - Drawbacks or complaints; booking-site benefits presented as the hotel's.
 - Unnatural or translated-sounding Korean, or sentences too long for a card.

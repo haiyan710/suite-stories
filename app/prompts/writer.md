@@ -33,6 +33,8 @@ Hard rules:
   and it is never the only support for an hour, a price, a distance or the
   booking case (use [TK] for those).
 - OUTLINE.house_style lists the house rules and banned phrases: follow them all.
+  Entries starting "Lesson #" come from the team's feedback on earlier work;
+  their Why tells you when they apply.
 - OUTLINE.venues (when given) has notes for each outside stop: use its hook
   for the why-go line, its dish for a restaurant, its booking and free_or_fee
   tips, its night note (a monument lit after dark makes a good after-dinner

@@ -345,3 +345,35 @@ def test_destination_photos_are_judged_by_looking_at_them(tmp_path):
     saved = db.project_state(pid)["concept"]["guide_ko"]
     assert list(saved["photo_credits"].values())[0]["place"] == "Hill Museum, Harbourtown"  # the blossom one is dropped
     assert saved["guide"]["days"][1]["photo"] == ""
+
+
+class CheckAndVerify:
+    def __init__(self):
+        self.verified = None
+
+    def complete(self, messages, *, system=None, **kwargs):
+        if system and system.startswith("# Check: Korean hotel guide"):
+            return LLMResponse(text=json.dumps({"verdict": "FIX", "fixes": [
+                "Day 2: remove the restaurant (unsupported).", "Day 3: shorten the summary."]}))
+        if system and "Verify suggested fixes" in system:
+            self.verified = json.loads(messages[0].content)["fixes"]
+            return LLMResponse(text=json.dumps({"verdicts": [
+                {"i": 0, "status": "refuted", "reason": "the evidence names it"}]}))
+        return LLMResponse(text="{}")
+
+
+def test_the_guide_checks_its_fixes_from_the_other_side(tmp_path):
+    from dataclasses import replace
+    o, db, pid, *_ = _draft_setup(tmp_path, [CritiqueResult(verdict="PASS", reasons=[])])
+    concept = dict(db.project_state(pid)["concept"])
+    concept["format"] = {"type": "itinerary", "nights": 3}
+    db.update_project_state(pid, "concept", concept)
+    o._settings = replace(o._settings, verify_fixes=True)
+    o._provider = writer = GuideProvider([guide(), guide()])
+    o._fast_provider = fast = CheckAndVerify()
+    outcome = o.handle_message("hotel guide", user_id="U1", thread_key="C:1")
+    assert [f["fix"] for f in fast.verified] == ["Day 2: remove the restaurant (unsupported).", "Day 3: shorten the summary."]
+    assert json.loads(writer.prompts[1][1])["fixes"] == ["Day 3: shorten the summary."]
+    saved = db.project_state(pid)["concept"]["guide_ko"]
+    assert saved["refuted_fixes"][0]["reason"] == "the evidence names it"
+    assert "1 suggested fix dropped after a second check" in outcome.markdown

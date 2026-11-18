@@ -16,7 +16,8 @@ Check, in this order:
    must be supported by the CONCEPT, OUTLINE or RESEARCH evidence. Anything
    else is an invented fact. One invented central fact is a FAIL.
 2. Restrictions: the outline's "avoid" list and the concept critic's revision
-   instructions must all be respected. House style (OUTLINE.house_style)
+   instructions must all be respected, and so must the "Lesson #" entries in
+   OUTLINE.house_style (the team's feedback on earlier drafts). House style (OUTLINE.house_style)
    wins over any request in the concept or its critique to attribute a claim
    in the text: sources are never named in the copy. Check support against the
    evidence instead (DRAFT.source_notes maps claims to S# ids); a claim the

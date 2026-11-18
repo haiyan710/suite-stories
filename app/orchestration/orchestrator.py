@@ -33,6 +33,7 @@ from ..states import (
 )
 from .calendar import TripCalendar, parse_trip_calendar
 from .draft_checks import apply_calendar, check_draft
+from .fix_check import verify_fixes
 from .handoffs import (
     ArtifactResult, BuildTask, CritiqueResult, CritiqueTask, DesignSpec, DesignTask, DraftResult, DraftTask,
     EditorialResult, EditorialTask, ResearchResult, ResearchTask,
@@ -573,6 +574,7 @@ class EditorialOrchestrator:
         draft: DraftResult | None = None
         critique: Any = None
         qa_revisions: list[str] = []
+        self._refuted_fixes: list[dict[str, str]] = []
         for attempt in (1, 2):
             draft = self._call("writer", writer.run, DraftTask(
                 project_id=project_id, hotel_name=str(state.get("project", {}).get("hotel", "")),
@@ -596,6 +598,7 @@ class EditorialOrchestrator:
                 project_id=project_id, mode="DRAFT", concept=concept, research=gated.to_dict(),
                 outline=outline, draft=draft.to_dict(),
             ), project_id, step_id=f"critic_draft_{attempt:02d}")
+            critique = self._verified_critique(critique, draft, gated, outline, project_id, f"fix_check_{attempt:02d}")
             critique = self._with_draft_checks(critique, draft, calendar, venues)
             if critique.verdict == Verdict.PASS or not critique.revision_instructions:
                 break
@@ -629,6 +632,7 @@ class EditorialOrchestrator:
                 project_id=project_id, mode="DRAFT", concept=concept, research=gated.to_dict(),
                 outline=outline, draft=draft.to_dict(),
             ), project_id, step_id=f"critic_draft_final{suffix}")
+            critique = self._verified_critique(critique, draft, gated, outline, project_id, f"fix_check_final{suffix}")
             critique = self._with_draft_checks(critique, draft, calendar, venues)
         polish = list(getattr(critique, "polish", None) or [])
         if fixes.get("applied") and polish and critique.verdict != Verdict.FAIL:
@@ -649,6 +653,8 @@ class EditorialOrchestrator:
                     "travel_estimates", "travel_fixes", "calendar", "user_amendments", "house_style", "contacts", "venues",
                 }
             }
+        if self._refuted_fixes:
+            fixes = {**fixes, "refuted": self._refuted_fixes}
         concept_state["sample_draft"] = {
             **draft.to_dict(), "qa": critique.to_dict(), "qa_fixes": fixes, "private_sources": private,
         }
@@ -693,6 +699,33 @@ class EditorialOrchestrator:
         verdict = Verdict.PASS_WITH_REVISIONS if critique.verdict == Verdict.PASS else critique.verdict
         return replace(critique, verdict=verdict, revision_instructions=[*(critique.revision_instructions or []), *new])
 
+    def _verified_critique(
+        self, critique: Any, draft: DraftResult, gated: ResearchResult, outline: dict[str, Any],
+        project_id: int, step_id: str,
+    ) -> Any:
+        """Drop the critic's fixes that a check from the other side refutes (VERIFY_FIXES).
+
+        Only PASS_WITH_REVISIONS is checked: a FAIL asks for a new draft, and Python's own
+        checks are added afterwards and never questioned. A pass whose every fix is refuted
+        becomes a PASS.
+        """
+        fixes = list(critique.revision_instructions or [])
+        if not self._settings.verify_fixes or critique.verdict != Verdict.PASS_WITH_REVISIONS or not fixes:
+            return critique
+        context = {k: outline.get(k) for k in (
+            "user_amendments", "house_style", "calendar", "venues", "avoid", "dont_claim", "travel_estimates",
+        ) if outline.get(k)}
+        check = self._call("fix_check", lambda _t: verify_fixes(
+            self._fast_provider, fixes, text=f"{draft.headline}\n{draft.standfirst}\n\n{draft.body}",
+            evidence=compact_research_json(gated.to_dict(), budget_chars=14000, focus_text=draft.body),
+            context=context,
+        ), None, project_id, step_id=step_id)
+        if not check.refuted:
+            return critique
+        self._refuted_fixes = [*getattr(self, "_refuted_fixes", []), *check.refuted]
+        verdict = critique.verdict if check.kept else Verdict.PASS
+        return replace(critique, verdict=verdict, revision_instructions=check.kept)
+
     @staticmethod
     def _hotel_photo_lines(research: ResearchResult, limit: int = 24) -> list[str]:
         """Short descriptions of the hotel-supplied photos, so the plan can use what will be shown."""
@@ -708,12 +741,17 @@ class EditorialOrchestrator:
         rows = [str(r["rule"]) for r in self._db.style_rules() if r["kind"] == "banned"]
         return list(dict.fromkeys([*rows, *self._settings.banned_phrases]))
 
-    def _house_style_payload(self, hotel: str) -> dict[str, Any]:
-        """House rules, banned phrases and who to ask, for the outline, writer and draft critic."""
+    def _house_style_payload(self, hotel: str, target: str = "draft") -> dict[str, Any]:
+        """House rules, banned phrases, the team's lessons and who to ask.
+
+        For the outline, writer and draft critic (target "draft") or the Korean guide
+        (target "guide"); each gets only the lessons that apply to it.
+        """
         rules = [str(r["rule"]) for r in self._db.style_rules() if r["kind"] != "banned"]
         banned = self._banned_phrases()
         if banned:
             rules.append("Never write: " + "; ".join(f'"{b}"' for b in banned) + ".")
+        rules += self._lesson_lines(target)
         payload: dict[str, Any] = {"house_style": rules}
         contacts = self._db.contacts(hotel) if hotel else {}
         if contacts:
@@ -759,6 +797,111 @@ class EditorialOrchestrator:
             self._db.set_contact("", "editor", name)
             return f"Noted: {name} is the editor who raises [ASK] notes with the hotel."
         return None
+
+    # ---- lessons: the team's feedback, generalised (the "evolve" loop) -----------------------
+    LESSON_TARGETS = ("concept", "draft", "guide")
+    _FEEDBACK = re.compile(r"^(?:feedback|lesson|góp ý|nhận xét|피드백)\s*:\s*(.+)$", re.I | re.S)
+    _LESSON_LIST = re.compile(r"^(?:show\s+|list\s+)?(?:the\s+)?lessons?(\s+history)?\s*\??$", re.I)
+    _LESSON_DROP = re.compile(r"^(?:remove|delete|drop|retire)\s+lesson\s*#?(\d+)\s*$", re.I)
+    _LESSON_KEEP = re.compile(r"^(?:confirm|keep|keep both)\s+(?:lesson\s*)?#?(\d+)\s*$", re.I)
+    _LESSON_SWAP = re.compile(r"^replace\s+lesson\s*#?(\d+)\s+with\s+(?:lesson\s*)?#?(\d+)\s*$", re.I)
+
+    def _lesson_lines(self, target: str) -> list[str]:
+        return [
+            f"Lesson #{x['id']}: {x['rule']}" + (f" (Why: {x['why']})" if x.get("why") else "")
+            for x in self._db.lessons(target=target)
+        ]
+
+    @staticmethod
+    def _latest_outputs(state: dict[str, Any]) -> dict[str, Any]:
+        """What the thread last produced, so feedback can be tied to the right flow."""
+        concept = state.get("concept") or {}
+        draft = concept.get("sample_draft") or {}
+        guide = (concept.get("guide_ko") or {}).get("guide") or {}
+        return {
+            "concept": (concept.get("outline") or {}).get("title") or (concept.get("editorial") or {}).get("working_title"),
+            "draft": draft.get("headline"), "draft_has_layout": bool(draft.get("layout_html")),
+            "guide": guide.get("title"),
+        }
+
+    def _lesson_command(self, user_text: str, user_id: str, thread_key: str, state: dict[str, Any]) -> str | None:
+        """Feedback becomes one general lesson with its reason; list, retire, confirm or replace lessons."""
+        text = self._plain_command(user_text)
+        if (m := self._LESSON_LIST.match(text)):
+            history = bool(m.group(1))
+            rows = self._db.lessons(statuses=("active", "pending", "retired") if history else ("active", "pending"))
+            if not rows:
+                return "No lessons yet. Say \"feedback: <what was wrong>\" and I'll turn it into a rule for next time."
+            lines = ["*Lessons from your feedback*" + (" (full history)" if history else "")]
+            for x in rows:
+                status = "" if x["status"] == "active" else f" _[{x['status']}" + (
+                    f" → #{x['replaced_by']}" if x.get("replaced_by") else "") + "]_"
+                lines.append(f"• #{x['id']} ({', '.join(x['applies_to'])}, {str(x['created_at'])[:10]}) "
+                             f"{x['rule']}{status}\n  _why: {x['why']}_")
+            lines.append("_\"remove lesson #N\" retires one; \"lessons history\" shows retired ones too._")
+            return "\n".join(lines)
+        if (m := self._LESSON_DROP.match(text)):
+            done = self._db.set_lesson_status(int(m.group(1)), "retired")
+            return f"Retired lesson #{m.group(1)} (kept in the history)." if done else f"There is no lesson #{m.group(1)}."
+        if (m := self._LESSON_SWAP.match(text)):
+            old, new = int(m.group(1)), int(m.group(2))
+            if not (self._db.lesson(old) and self._db.lesson(new)):
+                return "I can't find one of those lessons; say \"lessons\" to see them."
+            self._db.set_lesson_status(old, "retired", replaced_by=new)
+            self._db.set_lesson_status(new, "active")
+            return f"Lesson #{new} replaces #{old} from the next run."
+        if (m := self._LESSON_KEEP.match(text)):
+            lesson = self._db.lesson(int(m.group(1)))
+            if not lesson or lesson["status"] != "pending":
+                return None if not lesson else f"Lesson #{m.group(1)} is already {lesson['status']}."
+            self._db.set_lesson_status(int(m.group(1)), "active")
+            return f"Lesson #{m.group(1)} is active next to the ones it touched."
+        if not (m := self._FEEDBACK.match(text)):
+            return None
+        feedback = m.group(1).strip()
+        active = self._db.lessons()
+        try:
+            response = self._fast_provider.complete(
+                [LLMMessage(role="user", content=json.dumps({
+                    "feedback": feedback, "latest": self._latest_outputs(state),
+                    "lessons": [{"id": x["id"], "rule": x["rule"], "applies_to": x["applies_to"]} for x in active],
+                }, ensure_ascii=False))],
+                system=load_prompt("lesson_generalize"), max_tokens=800, temperature=0.0,
+            )
+            data = extract_json_block(response.text)
+        except AgentCancelled:
+            raise
+        except Exception:
+            logger.warning("Lesson generalisation failed", exc_info=True)
+            data = None
+        if not isinstance(data, dict):
+            return "I couldn't turn that into a lesson this time. Please try again."
+        rule = str(data.get("lesson") or "").strip()
+        if not rule:
+            note = str(data.get("note") or "it reads as a one-off, not a rule for every run").strip()
+            return f"I didn't save a lesson: {note}"
+        targets = [t for t in data.get("applies_to") or [] if t in self.LESSON_TARGETS] or ["draft"]
+        active_ids = {x["id"] for x in active}
+        conflicts = [int(i) for i in data.get("conflicts_with") or [] if str(i).isdigit() and int(i) in active_ids]
+        lesson_id = self._db.add_lesson(
+            rule, why=str(data.get("why") or ""), applies_to=targets, feedback=feedback, thread_key=thread_key,
+            status="pending" if conflicts else "active", conflicts_with=conflicts, created_by=user_id,
+        )
+        flows = {"concept": "the editorial angle", "draft": "outline, draft and QA", "guide": "the Korean guide"}
+        lines = [f"*Lesson #{lesson_id}*: {rule}", f"_why: {data.get('why')}_",
+                 f"Applies to: {', '.join(flows[t] for t in targets)}."]
+        if conflicts:
+            older = "; ".join(f"#{x['id']} \"{x['rule']}\"" for x in active if x["id"] in conflicts)
+            lines.append(
+                f"This goes against {older}. It is on hold: say \"replace lesson #{conflicts[0]} with #{lesson_id}\", "
+                f"or \"keep both #{lesson_id}\"."
+            )
+        else:
+            refines = [int(i) for i in data.get("refines") or [] if str(i).isdigit() and int(i) in active_ids]
+            if refines:
+                lines.append(f"It sharpens lesson #{', #'.join(map(str, refines))}.")
+            lines.append("It takes effect from the next run; ask again to see it applied.")
+        return "\n".join(lines)
 
     @staticmethod
     def _plain_command(text: str) -> str:
@@ -987,6 +1130,10 @@ class EditorialOrchestrator:
         if critique.verdict != Verdict.PASS:
             qa += [f"• {item}" for item in (critique.revision_instructions or critique.reasons or [])[:3]]
         qa += [f"• Not applied: {item}" for item in ((fixes or {}).get("skipped") or [])[:2]]
+        refuted = (fixes or {}).get("refuted") or []
+        if refuted:
+            qa.append(f"_{len(refuted)} suggested fix{'es' if len(refuted) > 1 else ''} dropped after a second check:_")
+            qa += [f"• {x['fix'][:140]} ({x['reason'][:140]})" for x in refuted[:3]]
         polish = list(getattr(critique, "polish", None) or [])
         if polish:
             qa.append("_Optional wording polish:_")
@@ -1041,6 +1188,8 @@ class EditorialOrchestrator:
             return "Writer: drafting a sample article" + suffix
         if specialist == "logistics":
             return "Logistics: checking routes and travel times between stops"
+        if specialist == "fix_check":
+            return "Critic: double-checking the suggested fixes against the evidence"
         if step_id == "draft_polish":
             return "Writer: applying the editor's wording polish"
         if specialist == "draft_fixes":
@@ -1105,6 +1254,8 @@ class EditorialOrchestrator:
         self._option_count = self._parse_option_count(user_text)
         self._option_note = ""
         style_reply = self._style_command(user_text, user_id, project_row)
+        if style_reply is None:
+            style_reply = self._lesson_command(user_text, user_id, thread_key or "", project_state)
         if style_reply is not None:
             return OrchestratorOutcome(style_reply, project_id=project_row["id"] if project_row else None)
         if project_row and (project_state.get("concept") or {}).get("options"):
@@ -1557,6 +1708,10 @@ class EditorialOrchestrator:
             )
         if self._dining_note:
             instructions.append(self._dining_note)
+        lessons = self._lesson_lines("concept")
+        if lessons:
+            instructions.append("LESSONS from the team's feedback on earlier work (follow them; each why says "
+                                "when it applies): " + " ".join(lessons))
         if self._option_note:
             instructions.append(self._option_note)
         if attempt > 1 and "critic required revisions" in prior_failure.lower():

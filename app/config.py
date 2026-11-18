@@ -69,6 +69,9 @@ class Settings:
     guide_place_photos: bool = False
     # Korean guide: daylight and typical weather on the trip dates (Open-Meteo archive, no key).
     guide_season: bool = False
+    # Test each fix a critic suggests (draft QA, guide check) from the other side before it
+    # is applied; refuted ones are dropped. load_settings turns it on; off keeps tests' call order.
+    verify_fixes: bool = False
     # Layout when a request names none: classic | zigzag | image_first | inline | hybrid.
     layout_style: str = "classic"
     photon_url: str = "https://photon.komoot.io/api/"
@@ -151,6 +154,7 @@ def load_settings(
         venue_notes=env.get("VENUE_NOTES", "1").strip().lower() not in {"0", "false", "no", ""},
         guide_place_photos=env.get("GUIDE_PLACE_PHOTOS", "1").strip().lower() not in {"0", "false", "no", ""},
         guide_season=env.get("GUIDE_SEASON", "1").strip().lower() not in {"0", "false", "no", ""},
+        verify_fixes=env.get("VERIFY_FIXES", "1").strip().lower() not in {"0", "false", "no", ""},
         layout_style=env.get("LAYOUT_STYLE", "hybrid").strip().lower() or "hybrid",
         photon_url=env.get("PHOTON_URL", "https://photon.komoot.io/api/").strip() or "https://photon.komoot.io/api/",
         osrm_url=(env.get("OSRM_URL", "https://routing.openstreetmap.de").strip() or "https://routing.openstreetmap.de").rstrip("/"),

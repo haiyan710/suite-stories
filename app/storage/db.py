@@ -355,6 +355,49 @@ class Database:
             cur = self._conn.execute("UPDATE style_rules SET active=0 WHERE id=? AND active=1", (rule_id,))
             return cur.rowcount > 0
 
+    # ---- lessons (feedback generalised into rules; the table is the change history) ----
+    def add_lesson(
+        self, rule: str, *, why: str, applies_to: list[str], feedback: str, thread_key: str = "",
+        status: str = "active", conflicts_with: list[int] | None = None, created_by: str = "",
+    ) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO lessons (rule, why, applies_to, feedback, thread_key, status, conflicts_with, created_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (rule.strip(), why.strip(), json.dumps(applies_to), feedback.strip(), thread_key, status,
+                 json.dumps(conflicts_with or []), created_by),
+            )
+            return int(cur.lastrowid)
+
+    def lessons(self, *, statuses: tuple[str, ...] = ("active",), target: str = "") -> list[dict[str, Any]]:
+        """Lessons in the given states, oldest first; with `target`, only those that apply to it."""
+        marks = ",".join("?" for _ in statuses)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM lessons WHERE status IN ({marks}) ORDER BY id", statuses,
+            ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["applies_to"] = json.loads(item.get("applies_to") or "[]")
+            item["conflicts_with"] = json.loads(item.get("conflicts_with") or "[]")
+            if not target or target in item["applies_to"]:
+                out.append(item)
+        return out
+
+    def lesson(self, lesson_id: int) -> dict[str, Any] | None:
+        rows = [x for x in self.lessons(statuses=("active", "pending", "retired")) if x["id"] == lesson_id]
+        return rows[0] if rows else None
+
+    def set_lesson_status(self, lesson_id: int, status: str, *, replaced_by: int | None = None) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE lessons SET status=?, replaced_by=COALESCE(?, replaced_by), "
+                "retired_at=CASE WHEN ?='retired' THEN datetime('now') ELSE retired_at END WHERE id=?",
+                (status, replaced_by, status, lesson_id),
+            )
+            return cur.rowcount > 0
+
     def set_contact(self, hotel: str, role: str, name: str) -> None:
         key = self.hotel_key(hotel) if hotel else ""  # takes the lock itself
         with self._lock, self._conn:

@@ -4,7 +4,7 @@ Deliberately small: four tables plus a lightweight thread-history table.
 Migrations are additive (see db.py).
 """
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -196,6 +196,25 @@ CREATE TABLE IF NOT EXISTS style_rules (
     active INTEGER NOT NULL DEFAULT 1,
     created_by TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Lessons from the team's feedback ("feedback: ..."), generalised into one rule each with
+-- its reason, for the flows they name (applies_to: JSON list of concept | draft | guide).
+-- status: active | pending (conflicts with an active lesson, waits for the team) | retired.
+-- Rows are never deleted: the table is the change history.
+CREATE TABLE IF NOT EXISTS lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule TEXT NOT NULL,
+    why TEXT NOT NULL DEFAULT '',
+    applies_to TEXT NOT NULL DEFAULT '[]',
+    feedback TEXT NOT NULL DEFAULT '',
+    thread_key TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    conflicts_with TEXT NOT NULL DEFAULT '[]',
+    replaced_by INTEGER,
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    retired_at TEXT
 );
 
 -- Who to ask: the hotel's contact per hotel_key, and the editor (hotel_key '').
