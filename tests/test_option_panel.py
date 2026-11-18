@@ -111,3 +111,15 @@ def test_combine_as_recommended_without_a_suggestion_says_so(tmp_path: Path):
     o.handle_message("Research Hotel X and give me 2 options", user_id="U1", thread_key="C:none")
     reply = o.handle_message("kết hợp theo đề xuất", user_id="U1", thread_key="C:none")
     assert "no combination to suggest" in reply.markdown
+
+
+def test_long_judge_notes_are_cut_at_a_word_and_end_a_sentence():
+    long = "Its booking reason belongs only to this hotel " + "and its venues " * 40
+    answer = {"scores": [{"label": "A", "score": 8, "strength": long, "weakness": "Thin room detail"},
+                         {"label": "B", "score": 6, "strength": "Strong dining", "weakness": "Generic"}],
+              "best": "A", "take": []}
+    panel = judge_options(Judges({"booking": answer, "evidence": answer}), OPTIONS[:2], evidence="", context={})
+    strength = panel.ranking[0]["strengths"][0]
+    assert strength.endswith("…") and len(strength) <= 321 and not strength.endswith(" …")
+    assert panel.ranking[0]["weaknesses"][0] == "Thin room detail."
+    assert "Recommended: *option A*: Its booking" in format_panel(panel)

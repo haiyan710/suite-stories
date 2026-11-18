@@ -2448,7 +2448,7 @@ class EditorialOrchestrator:
             "recent_concepts": [
                 {k: c.get(k) for k in ("hotel", "concept", "status")} for c in self._memory_payload(project_id)[:20]
             ],
-            "lessons": self._lesson_lines("concept"),
+            "house_style": self._house_style_payload(hotel, "concept")["house_style"],
         }
         try:
             return self._call("option_panel", lambda _t: judge_options(

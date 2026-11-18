@@ -364,7 +364,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 312 tests run offline with fake LLM providers and fetchers. The live
+The 313 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 ## Limitations

@@ -17,6 +17,10 @@ a trip that works on its dates.
 Then name the best option, and at most two things the best option could take
 from another one: a concrete element (a moment, a reason to book, a stop, an
 opening), not "its tone". Leave "take" empty when nothing is worth taking.
+A suggestion must follow the house style in CONTEXT and the team's lessons:
+the copy never names its sources ("one review", "per the hotel"), so never
+suggest attributing a claim; a claim the evidence only partly supports goes
+in with a [TK] or [ASK …] note instead.
 
 Return JSON only:
 

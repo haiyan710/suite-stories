@@ -33,6 +33,15 @@ JUDGES: tuple[tuple[str, str], ...] = (
                   "hotel name), fresher against recent concepts, with a stronger title and opening?"),
 )
 MIN_JUDGES = 2
+NOTE_CHARS = 320
+
+
+def _sentence(text: Any, limit: int = NOTE_CHARS) -> str:
+    """One judge note, cut at a word boundary with an ellipsis when too long, ending with a full stop."""
+    text = " ".join(str(text or "").split())
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return text if not text or text.endswith((".", "!", "?", "…")) else text + "."
 
 
 @dataclass(frozen=True)
@@ -121,7 +130,7 @@ def _judge(
     if best not in labels:
         best = max(scores, key=lambda label: scores[label][0])
     take = [
-        {"from": str(t.get("from")), "what": str(t.get("what") or "").strip()[:240]}
+        {"from": str(t.get("from")), "what": _sentence(t.get("what"))}
         for t in data.get("take") or []
         if isinstance(t, dict) and str(t.get("from")) in labels and str(t.get("what") or "").strip()
     ]
@@ -151,8 +160,8 @@ def judge_options(
             "label": label, "title": str(digest.get("title") or ""),
             "mean": round(sum(score for score, _ in rows.values()) / len(rows), 1),
             "scores": {lens: score for lens, (score, _) in rows.items()},
-            "strengths": [str(r.get("strength") or "")[:200] for _, r in rows.values() if r.get("strength")],
-            "weaknesses": [str(r.get("weakness") or "")[:200] for _, r in rows.values() if r.get("weakness")],
+            "strengths": [_sentence(r.get("strength")) for _, r in rows.values() if r.get("strength")],
+            "weaknesses": [_sentence(r.get("weakness")) for _, r in rows.values() if r.get("weakness")],
         })
     votes = {lens: a["best"] for lens, a in answers}
     vote_count = {label: list(votes.values()).count(label) for label in (d["label"] for d in digests)}
@@ -177,6 +186,7 @@ def format_panel(panel: PanelResult) -> str:
     lines.append(
         f"Recommended: *option {panel.recommended}*"
         + (f": {best['strengths'][0]}" if best["strengths"] else "")
+        + ("." if not best["strengths"] else "")
         + (" The judges split: " + ", ".join(f"{lenses.get(k, k)} → {v}" for k, v in panel.votes.items()) + "."
            if panel.split else "")
     )
