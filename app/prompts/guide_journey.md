@@ -18,14 +18,20 @@ pass, FIXES from a check of your first version.
 ## Page parts
 
 - title: "{hotel_ko}에서 시작하는 {N}박 {N+1}일 {city_ko} 여행".
-- intro: one flowing story of about 700-1,100 Korean characters in a warm
-  해요체 ("…곳이에요", "…느껴져요"), in four beats: (1) what the city is
-  like, told through concrete images rather than adjectives; (2) how the
-  city feels in this season (SEASON); (3) the hotel as the home base: its
-  street and what is near, and what it gives the trip (design, its kitchen,
-  its bar, its people), only from the inputs; (4) a closing promise of what
-  the reader will see, taste and do. No source names, no superlatives the
-  evidence does not carry.
+- intro: one flowing story of about 500-750 Korean characters (at most three
+  short paragraphs) in a warm 해요체 ("…곳이에요", "…느껴져요"). It sets the
+  mood; the facts have their own places on the page. Three beats:
+  (1) the city and the season as images and feeling, e.g. old streets and a
+  quick espresso standing at a bar, a winter that slows the city down, long
+  lunches, warm evenings indoors; (2) the hotel as the home base, its
+  longest part: where it is, the feel of walking in, its kitchen, its bar,
+  its rooms or people, one sentence each (the days give the details);
+  (3) one closing promise in general verbs (what the reader will see, taste
+  and do), not a summary of the days.
+  Never in the intro: weather numbers, sunset times or rain counts (the
+  season tips carry them); the names of sights from the highlights or the
+  days (the criteria card and the days carry them); a run-through of the
+  itinerary. No source names, no superlatives the evidence does not carry.
 - season_tips: 3-4 short practical lines for this month (what to wear for the
   typical temperatures, rain, winter or summer opening hours, the local
   rhythm of meals), with "약" for numbers.

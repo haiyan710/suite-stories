@@ -127,3 +127,19 @@ def test_journey_triggers():
     assert korean_guide.wants_journey("호텔 저니 만들어 주세요")
     assert korean_guide.wants_journey("làm bản journey cho khách sạn này")
     assert not korean_guide.wants_journey("hotel guide")
+
+
+def test_the_intro_leaves_weather_numbers_and_length_to_the_rest_of_the_page():
+    numbers = journey(intro=INTRO[:600] + " 2월의 도시는 낮에 약 15도까지 오르고, 해는 오후 5시 반 무렵에 져요.")
+    assert any("weather numbers" in issue for issue in validate_journey(numbers, nights=3))
+    words = journey(intro=INTRO[:600] + " 닷새 중 이틀쯤은 비가 내리기도 해요.")
+    assert any("weather numbers" in issue for issue in validate_journey(words, nights=3))
+    long = journey(intro=INTRO * 2)
+    assert any("500-750" in issue for issue in validate_journey(long, nights=3))
+    assert validate_journey(journey(intro=INTRO[:600] + " 겨울이면 도시는 느려지고 점심은 길어져요."), nights=3) == []
+
+
+def test_prices_are_not_mistaken_for_platform_benefits():
+    page = journey()
+    page["days"][0]["moments"][0]["text"] += " 공항에서 시내까지 정액 택시 요금은 €48이며, 입장권은 약 2유로입니다."
+    assert validate_journey(page, nights=3) == []

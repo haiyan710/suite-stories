@@ -23,10 +23,15 @@ TIME_LABELS = ("오전", "오후", "저녁")
 # The journey page's finer day (the booking site's own hotel journeys use these).
 JOURNEY_TIMES = ("아침", "오전", "점심", "오후", "늦은 오후", "이른 저녁", "저녁", "밤")
 MAX_JOURNEY_MOMENT_CHARS = 600
+# Facts the journey intro must leave to the season tips: temperatures, sunset times, rain counts.
+INTRO_FACTS = re.compile(
+    r"\d+\s*(?:도|°)|(?:해가?|해는|일몰)[^.]{0,25}\d|(?:\d+\s*일|하루|이틀|사흘|나흘)\s*(?:중|쯤|정도)?은?[^.]{0,8}비"
+)
 # Booking-platform benefits (credits, upgrades, breakfast for two) are the platform's
 # policy, not the hotel's and not the bot's to state: never written on a page.
 PLATFORM_BENEFIT = re.compile(
-    r"크레딧|credit|[$€₩]\s?\d|\d\s?(?:달러|유로)\s*(?:상당|혜택)|업그레이드\s*혜택|2인\s*조식|조식\s*2인|"
+    r"크레딧|credit|[$€₩]\s?\d[\d,.]*\s*(?:상당|어치)?\s*(?:의\s*)?혜택|\d\s?(?:달러|유로)\s*(?:상당|혜택)|업그레이드\s*혜택|"
+    r"2인\s*조식|조식\s*2인|"
     r"투숙객\s*(?:특별\s*)?혜택|예약\s*혜택|멤버십\s*혜택",
     re.I,
 )
@@ -77,8 +82,13 @@ def validate_journey(guide: Mapping[str, Any], *, nights: int) -> list[str]:
         if not str(guide.get(key) or "").strip():
             issues.append(f"Fill in '{key}'.")
     intro = str(guide.get("intro") or "")
-    if intro and not 500 <= len(intro) <= 1400:
-        issues.append(f"Write the intro as one flowing story of about 700-1,100 characters (it has {len(intro)}).")
+    if intro and not 350 <= len(intro) <= 900:
+        issues.append(f"Write the intro as a mood story of about 500-750 characters (it has {len(intro)}).")
+    if INTRO_FACTS.search(intro):
+        issues.append(
+            "Take the weather numbers and sunset time out of the intro: the season tips carry them; "
+            "write the season as mood (slower days, long lunches, warm evenings)."
+        )
     tips = [t for t in guide.get("season_tips") or [] if str(t).strip()]
     if not 3 <= len(tips) <= 4:
         issues.append(f"Give 3-4 season tips (there are {len(tips)}).")

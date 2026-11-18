@@ -27,8 +27,11 @@ Flag, one instruction each:
 
 When FORMAT is "journey" (the denser hotel-journey page: a story intro,
 season tips, 3-8 moments a day), also flag:
-- An intro that is not one warm 해요체 story (city, season, the hotel as home
-  base, a closing promise) or that claims what the inputs do not carry.
+- An intro that is not one warm 해요체 story of about 500-750 characters
+  (the city and season as mood, the hotel as home base, a short promise),
+  that claims what the inputs do not carry, or that repeats what the page
+  says elsewhere: weather numbers or sunset times (the season tips), sights
+  named in the highlights or the days, or a run-through of the itinerary.
 - Season tips credited to the hotel ("…이 전하는 시즌별 팁") when the hotel did
   not send them (season_tips_from_hotel must come with quotes from the
   hotel's own documents).
