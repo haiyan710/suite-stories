@@ -30,6 +30,7 @@ _FILES = {
     "venue_notes": "venue_notes.md",
     "guide_ko": "guide_ko.md",
     "guide_ko_check": "guide_ko_check.md",
+    "guide_journey": "guide_journey.md",
     "guide_place_photos": "guide_place_photos.md",
     "guide_place_photos_look": "guide_place_photos_look.md",
     "lesson_generalize": "lesson_generalize.md",

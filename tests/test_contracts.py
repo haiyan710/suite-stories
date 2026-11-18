@@ -60,6 +60,11 @@ PROMPT_CONTRACTS: dict[str, tuple[tuple[str, ...], set[str]]] = {
         "hotel_ko", "title", "summary", "theme", "travel_tip", "days", "day", "moments", "time", "text",
         "photo", "place", "hero_photo",
     }),
+    "guide_journey": (("app/artifacts/guide_ko.py", "app/side_flows/korean_guide.py"), {
+        "hotel_ko", "title", "intro", "season_tips", "season_tips_from_hotel", "hotel_tip_quotes", "criteria_line",
+        "highlights", "days_intro", "days", "day", "moments", "time", "text", "tip", "style", "place", "photo",
+        "hero_photo", "move_tip",
+    }),
     "guide_ko_check": (("app/side_flows/korean_guide.py",), {"verdict", "fixes"}),
     "guide_place_photos": (("app/side_flows/korean_guide.py",), {"picks", "place", "pick"}),
     "guide_place_photos_look": (("app/side_flows/korean_guide.py",), {"picks", "place", "pick"}),
@@ -120,13 +125,15 @@ def test_the_side_flow_reads_only_what_travels_with_the_active_option():
     assert read <= set(EditorialOrchestrator.OPTION_KEYS), sorted(read - set(EditorialOrchestrator.OPTION_KEYS))
 
 
-def test_the_side_flow_writes_only_its_own_key():
-    written = set(re.findall(r'concept_state\["(\w+)"\]\s*=', SIDE_FLOW))
-    assert written == {"guide_ko"}, written
+def test_the_side_flow_writes_only_its_own_keys():
+    assert not re.findall(r'concept_state\["(\w+)"\]\s*=', SIDE_FLOW)  # only through its page kinds
+    assert re.findall(r"concept_state\[kind\.key\]\s*=", SIDE_FLOW)
+    written = {korean_guide.GUIDE.key, korean_guide.JOURNEY.key}
+    assert written == {"guide_ko", "guide_journey"}, written
     stages = set(re.findall(r'update_project_state\([^,]+,\s*"(\w+)"', SIDE_FLOW))
     assert stages == {"concept"}, stages
     assert "status=" not in "".join(re.findall(r"update_project_state\([^)]*\)", SIDE_FLOW))
-    assert "guide_ko" not in EditorialOrchestrator.OPTION_KEYS  # the guide never moves concept state
+    assert not written & set(EditorialOrchestrator.OPTION_KEYS)  # the side flow never moves concept state
 
 
 def test_the_side_flow_uses_only_declared_host_helpers():

@@ -385,6 +385,32 @@ class EditorialOrchestrator:
         self._db.update_project_state(project_id, "research", research.to_dict())
         return research
 
+    def _journey_research(
+        self, project_id: int, state: dict[str, Any], research: ResearchResult,
+    ) -> ResearchResult:
+        """Places a dense journey day needs that an editorial plan rarely names (side flow, once per thread)."""
+        project = state.get("project") or {}
+        hotel = str(project.get("hotel", ""))
+        identity = research.property_identity if isinstance(research.property_identity, dict) else {}
+        city = str(project.get("city") or identity.get("city") or f"the city around {hotel}")
+        questions = [
+            f"Classic cafés and coffee bars in {city} near the main sights and near {hotel}: what to order",
+            f"Cocktail bars, wine bars and late-evening places near {hotel} and in central {city}",
+            f"Shopping streets, department stores, design shops and markets in {city}: which days markets run",
+            f"Good lunch places near the main museums and sights of {city}: dishes and reservations",
+            f"Visiting {city} in the season of the trip: indoor options in rain, seasonal opening hours, local meal times",
+        ]
+        research = self._call(
+            "researcher", self._researcher.run,
+            ResearchTask(
+                project_id=project_id, hotel_name=hotel, original_request=self._active_goal,
+                followup_questions=questions, existing_research=research.to_dict(),
+                trip_nights=self._trip_nights, destination=True,
+            ), project_id, step_id="research_journey",
+        )
+        self._db.update_project_state(project_id, "research", research.to_dict())
+        return research
+
     def _needs_experience_research(self, research: ResearchResult) -> bool:
         return self._settings.experience_research and not any(
             isinstance(item, dict) and item.get("evidence_level") == "guest_report"
@@ -1177,6 +1203,8 @@ class EditorialOrchestrator:
             return "Research: guest reviews, insider tips and the hotel's stories"
         if step_id == "research_itinerary":
             return "Research: restaurants, sights and day trips for the itinerary"
+        if step_id == "research_journey":
+            return "Research: cafés, bars, shopping and lunch spots for the journey page"
         if step_id == "research_venues":
             return "Research: why each stop is worth it, and when it is open"
         if step_id == "ingest_documents":
@@ -1274,7 +1302,9 @@ class EditorialOrchestrator:
                 self._resolve_calendar(user_text, project_state)
         # Side flow: the Korean hotel guide reads the editorial state and writes its own output.
         if project_row and korean_guide.matches(self._plain_command(user_text), project_state):
-            return self._korean_guide(int(project_row["id"]), project_state)
+            return self._korean_guide(
+                int(project_row["id"]), project_state, journey=korean_guide.wants_journey(self._plain_command(user_text)),
+            )
         route = self._classify(user_text, history, session, project_state)
         intent = str(route.get("intent", Intent.GENERAL_CONVERSATION)).upper()
         if self._is_project_status_question(user_text):
@@ -2325,13 +2355,15 @@ class EditorialOrchestrator:
         return self._format_editorial(editorial, critique, lifecycle, research) + note, concept_id
 
     # ---- side flows (run beside the editorial flow, never change its state) ---------------
-    def _korean_guide(self, project_id: int, state: dict[str, Any]) -> OrchestratorOutcome:
+    def _korean_guide(self, project_id: int, state: dict[str, Any], *, journey: bool = False) -> OrchestratorOutcome:
         result = korean_guide.KoreanGuideFlow(
             self, settings=self._settings, db=self._db, provider=self._step_provider("guide_write", self._provider),
             fast_provider=self._fast_provider, check_provider=self._step_provider("guide_check", self._fast_provider),
             place_photos=self._place_photos, season=self._season,
-            geo=self._geo, step=lambda label: self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: " + label),
-        ).run(project_id, state)
+            geo=self._geo, step=lambda label: self._notify(
+                STEP_PROGRESS_PREFIX + ("Korean hotel journey: " if journey else "Korean hotel guide: ") + label
+            ),
+        ).run(project_id, state, journey=journey)
         return OrchestratorOutcome(result.markdown, project_id=project_id, attachments=result.attachments)
 
     # ---- several options, choosing one, combining them --------------------------------------

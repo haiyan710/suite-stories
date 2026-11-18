@@ -50,6 +50,7 @@ def _pick_project(db: Database, wanted: int | None) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--project", type=int, default=None, help="project id (default: latest draftable)")
+    parser.add_argument("--journey", action="store_true", help="the hotel-journey page instead of the short guide")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     fixture = json.loads((ROOT / "tests/fixtures/golden_guide.json").read_text(encoding="utf-8"))
@@ -78,10 +79,11 @@ def main() -> int:
         thread_key = project["slack_thread_ts"]
         try:
             outcome = orchestrator.handle_message(
-                fixture["request"], user_id="golden", thread_key=thread_key,
+                fixture["request_journey" if args.journey else "request"], user_id="golden", thread_key=thread_key,
                 channel_id=project["slack_channel"], thread_ts=thread_key.rsplit(":", 1)[-1],
             )
-            stored = (db.project_state(int(project["id"])).get("concept") or {}).get("guide_ko") or {}
+            key = "guide_journey" if args.journey else "guide_ko"
+            stored = (db.project_state(int(project["id"])).get("concept") or {}).get(key) or {}
             evaluation = evaluate_guide(stored, fixture)
             report = {
                 "case": fixture["case"], "project_id": project["id"],
@@ -93,7 +95,7 @@ def main() -> int:
         finally:
             getattr(provider, "close", lambda: None)()
             db.close()
-    output = ROOT / "data" / f"golden_guide_{stamp}.json"
+    output = ROOT / "data" / f"golden_{'journey' if args.journey else 'guide'}_{stamp}.json"
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     for check in evaluation.checks:
         print(f"{'PASS' if check.passed else 'FAIL'}  {check.name:<20} {check.detail}")

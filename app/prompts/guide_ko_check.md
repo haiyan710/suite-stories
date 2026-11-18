@@ -25,6 +25,19 @@ Flag, one instruction each:
 - A day missing the hotel, a plan that does not start with arrival or end with
   departure.
 
+When FORMAT is "journey" (the denser hotel-journey page: a story intro,
+season tips, 3-8 moments a day), also flag:
+- An intro that is not one warm 해요체 story (city, season, the hotel as home
+  base, a closing promise) or that claims what the inputs do not carry.
+- Season tips credited to the hotel ("…이 전하는 시즌별 팁") when the hotel did
+  not send them (season_tips_from_hotel must come with quotes from the
+  hotel's own documents).
+- A restaurant without a dish or "[확인 필요: 추천 메뉴]"; a market or shop
+  on a day it is closed; a moment text over five sentences.
+- Any booking-platform benefit (credits, upgrades, breakfast for two, "혜택").
+Moments may be longer here (up to five sentences) and may use 아침, 점심,
+늦은 오후, 이른 저녁 and 밤 as times; do not flag those.
+
 Return JSON only:
 
 {"verdict": "PASS|FIX", "fixes": ["…"]}

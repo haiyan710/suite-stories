@@ -74,6 +74,16 @@ layout plus JSON for the site.
   candidates before picking: an empty slot is preferred to the wrong season.
 - Unknowns are marked `[확인 필요: …]` for the editor. It runs on Claude only.
 
+`hotel journey` (or `호텔 저니`, `bản journey`) writes the site's denser
+hotel-journey page from the same inputs: a story intro (the city, the season,
+the hotel as home base), 3-4 season tips, a criteria card, then each day with
+four to eight moments from 아침 to 밤, with practical tips in place and, on a
+free morning, parallel options for different tastes. The hotel appears every
+day, from check-in to check-out. Its first run in a thread researches cafés,
+bars, shopping and lunch spots. Tips are credited to the hotel only when the
+hotel's own documents say them, and booking-platform benefits are never
+written on either page.
+
 Each step is checked by a critic before the team sees it, and every fact in
 the output can be traced to a stored source. The critic's suggested fixes are
 themselves checked from the other side before they are applied, so a fix that
@@ -225,7 +235,7 @@ and 2 visual revision cycles.
   question cannot swallow the next request, and "what's the status?" answers
   with the stage and the next things to say.
 - **Methodology lives in prompts.** Editorial behaviour is in
-  `app/prompts/*.md` (30 files). Tune those files before adding code.
+  `app/prompts/*.md` (31 files). Tune those files before adding code.
 
 ---
 
@@ -360,6 +370,7 @@ write a sample draft                                → draft with QA verdict
 write a sample draft. <correction>                  → the correction overrides the stored concept
 make the layout / side by side / all four layouts   → HTML layout files in the thread
 hotel guide / 호텔 가이드 / bản tiếng Hàn           → side flow: Korean web itinerary page (HTML + JSON)
+hotel journey / 호텔 저니 / bản journey             → side flow: the denser hotel-journey page (HTML + JSON)
 <attach the hotel's PDF deck or photo files>        → facts and photos added as hotel evidence
 Hotel confirmed: <pasted reply>                     → confirms open claims and re-runs editorial
 style rules / style rule: … / banned phrase: a | b  → house style, used by every draft
@@ -376,7 +387,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 345 tests run offline with fake LLM providers and fetchers. The live
+The 353 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 Two live golden checks score real output against criteria only, never

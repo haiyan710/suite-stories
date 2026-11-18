@@ -30,14 +30,14 @@ from ..agent import AgentCancelled
 from ..artifacts import ArtifactManager
 from ..artifacts.guide_ko import (
     apply_place_photos, dedupe_photos, fill_empty_days, guide_check_items, guide_jsonld, guide_places,
-    is_outdoor, render_guide_html, validate_guide,
+    hotel_tip_quotes_ok, is_outdoor, render_guide_html, render_journey_html, validate_guide, validate_journey,
 )
 from ..config import Settings
 from ..llm.base import LLMMessage, LLMProvider
 from ..llm.zai_glm import extract_json_block
 from ..orchestration.fix_check import verify_fixes
 from ..orchestration.handoffs import ResearchResult
-from ..orchestration.planning import compact_research_json
+from ..orchestration.planning import compact_research_json, fact_text
 from ..prompts import load_prompt
 from ..states import DRAFTABLE_CONCEPTS
 from ..storage import Database
@@ -52,13 +52,40 @@ TRIGGER = re.compile(
     r"한국어 ?(?:가이드|버전|페이지)|tiếng hàn|bản hàn",
     re.I,
 )
+# The denser hotel-journey page: a story intro, season tips and 4-8 moments a day.
+JOURNEY_TRIGGER = re.compile(
+    r"\bhotel[ -]journey\b|\bjourney (?:page|guide)\b|호텔 ?저니|저니 ?페이지|bản journey|trang journey",
+    re.I,
+)
 # Commons photos per place that Claude opens to judge the season (downloaded first).
 LOOK_CANDIDATES = 4
 
 
 def matches(text: str, state: dict[str, Any]) -> bool:
-    """A guide request in a thread whose concept the team can draft from."""
-    return bool(TRIGGER.search(text)) and (state.get("concept") or {}).get("status") in DRAFTABLE_CONCEPTS
+    """A guide or journey request in a thread whose concept the team can draft from."""
+    return bool(TRIGGER.search(text) or JOURNEY_TRIGGER.search(text)) and (
+        (state.get("concept") or {}).get("status") in DRAFTABLE_CONCEPTS
+    )
+
+
+def wants_journey(text: str) -> bool:
+    return bool(JOURNEY_TRIGGER.search(text))
+
+
+@dataclass(frozen=True)
+class PageKind:
+    """The two pages this side flow writes; they share inputs, photos, season and checks."""
+
+    key: str  # concept_state key and file suffix
+    prompt: str
+    label: str
+    validate: Callable[..., list[str]]
+    render: Callable[..., str]
+    max_tokens: int
+
+
+GUIDE = PageKind("guide_ko", "guide_ko", "Korean hotel guide", validate_guide, render_guide_html, 6000)
+JOURNEY = PageKind("guide_journey", "guide_journey", "Korean hotel journey", validate_journey, render_journey_html, 14000)
 
 
 @dataclass
@@ -73,6 +100,7 @@ class EditorialHost(Protocol):
     _trip_nights: int
 
     def _cleared_images(self, research: ResearchResult) -> list[dict[str, Any]]: ...
+    def _journey_research(self, project_id: int, state: dict[str, Any], research: ResearchResult) -> ResearchResult: ...
     def _closed_space_photos(self, photos: dict[str, Any], state: dict[str, Any]) -> list[str]: ...
     def _gated_research(self, research: ResearchResult) -> ResearchResult: ...
     def _house_style_payload(self, hotel: str, target: str = ...) -> dict[str, Any]: ...
@@ -104,11 +132,11 @@ class KoreanGuideFlow:
         self._geo = geo
         self._step = step
 
-    def _write_guide(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _write_guide(self, payload: dict[str, Any], kind: PageKind = GUIDE) -> dict[str, Any]:
         try:
             response = self._provider.complete(
                 [LLMMessage(role="user", content=json.dumps(payload, ensure_ascii=False))],
-                system=load_prompt("guide_ko"), max_tokens=6000, temperature=0.3,
+                system=load_prompt(kind.prompt), max_tokens=kind.max_tokens, temperature=0.3,
             )
         except AgentCancelled:
             raise
@@ -224,14 +252,26 @@ class KoreanGuideFlow:
                 }
         return chosen
 
-    def run(self, project_id: int, state: dict[str, Any]) -> SideFlowResult:
-        """Write the page from the thread's concept, draft and research; store it in concept_state.guide_ko.
+    def run(self, project_id: int, state: dict[str, Any], *, journey: bool = False) -> SideFlowResult:
+        """Write the page from the thread's concept, draft and research; store it in its own key.
 
         Claude writes it (hotel material may be in the evidence), Python checks its shape,
-        a fast-model check compares it with the plan, and one fix pass follows.
+        a fast-model check compares it with the plan, and one fix pass follows. The journey
+        page (journey=True) is the denser format: a story intro, season tips and 4-8 moments
+        a day; the first one for a thread runs one research round for cafés, bars, shopping
+        and lunch spots, since a dense day needs more named places than the editorial plan has.
         """
+        kind = JOURNEY if journey else GUIDE
         concept_state = dict(state.get("concept") or {})
         research = ResearchResult.from_dict(state.get("research") or {})
+        if journey and not concept_state.get(JOURNEY.key):
+            self._step("finding cafés, bars, shopping and lunch spots")
+            try:
+                research = self._host._journey_research(project_id, state, research)
+            except AgentCancelled:
+                raise
+            except Exception:
+                logger.warning("Journey research failed; writing from the evidence there is", exc_info=True)
         gated = self._host._gated_research(research)
         hotel = str(state.get("project", {}).get("hotel", ""))
         piece_format = dict(concept_state.get("format") or {})
@@ -263,20 +303,29 @@ class KoreanGuideFlow:
             "photos": [{"id": key, "shows": str(a.get("evidence") or a.get("page_context") or "")[:200],
                         "outdoor": key in outdoor}
                        for key, a in photos.items()],
-            "evidence": compact_research_json(gated.to_dict(), budget_chars=20000, focus_text=focus),
+            "evidence": compact_research_json(
+                gated.to_dict(), budget_chars=28000 if journey else 20000, focus_text=focus,
+            ),
         }
+        hotel_facts = [
+            fact_text(item) for item in gated.verified_facts
+            if isinstance(item, dict) and item.get("evidence_level") == "hotel_document"
+        ]
+        if journey:
+            payload["hotel_document_facts"] = hotel_facts[:60]
         self._step("writing the page")
-        guide = self._write_guide(payload)
+        guide = self._write_guide(payload, kind)
         if not guide:
             return SideFlowResult(
-                "I couldn't write the Korean hotel guide this time. Please try again.", 
+                f"I couldn't write the {kind.label} this time. Please try again.",
             )
-        fixes = validate_guide(guide, nights=nights)
+        fixes = kind.validate(guide, nights=nights)
         refuted: list[dict[str, str]] = []
         self._step("checking it against the plan")
         try:
             response = self._check_provider.complete(
                 [LLMMessage(role="user", content=json.dumps({
+                    "format": "journey" if journey else "guide",
                     "guide": guide, "plan": plan, "stop_notes": payload["stop_notes"], "season": season,
                     "house_style": payload["house_style"],
                     "evidence": compact_research_json(gated.to_dict(), budget_chars=14000, focus_text=focus),
@@ -304,16 +353,23 @@ class KoreanGuideFlow:
         applied = 0
         if fixes:
             self._step("applying the fixes")
-            revised = self._write_guide({**payload, "previous": guide, "fixes": fixes})
-            if revised and len(validate_guide(revised, nights=nights)) <= len(validate_guide(guide, nights=nights)):
+            revised = self._write_guide({**payload, "previous": guide, "fixes": fixes}, kind)
+            if revised and len(kind.validate(revised, nights=nights)) <= len(kind.validate(guide, nights=nights)):
                 guide, applied = revised, len(fixes)
+        tips_note = ""
+        if journey and guide.get("season_tips_from_hotel") and not hotel_tip_quotes_ok(
+            [str(q) for q in guide.get("hotel_tip_quotes") or []], hotel_facts,
+        ):
+            # Tips are credited to the hotel only when the hotel itself sent them.
+            guide["season_tips_from_hotel"] = False
+            tips_note = "season tips not credited to the hotel (no hotel document says them)"
         hotel_ids = list(photos)
         guide = dedupe_photos(guide)
         places = self._find_place_photos(guide, season)
         place_ids = {place: f"w{i}" for i, place in enumerate(places, 1)}
         photos.update({place_ids[place]: asset for place, asset in places.items()})
         guide = fill_empty_days(apply_place_photos(guide, place_ids), hotel_ids, outdoor=outdoor)
-        remaining = validate_guide(guide, nights=nights)
+        remaining = kind.validate(guide, nights=nights)
         checks = guide_check_items(guide)
         out_dir = (
             self._settings.artifacts_path / ArtifactManager.safe_slug(hotel or "hotel") / "guides"
@@ -321,9 +377,10 @@ class KoreanGuideFlow:
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         slug = ArtifactManager.safe_slug(hotel or "hotel")
-        html_path = out_dir / f"{slug}-hotel-guide-ko.html"
-        json_path = out_dir / f"{slug}-hotel-guide-ko.json"
-        html_path.write_text(render_guide_html(
+        suffix = "hotel-journey-ko" if journey else "hotel-guide-ko"
+        html_path = out_dir / f"{slug}-{suffix}.html"
+        json_path = out_dir / f"{slug}-{suffix}.json"
+        html_path.write_text(kind.render(
             guide, photos=photos, hotel=hotel,
             note="검토용 초안 · [확인 필요] 표시는 호텔 확인 후 수정 · 호텔 사진: 호텔 제공 이미지"
                  + (" · 관광지 사진: Wikimedia Commons (각 사진에 저작자·라이선스 표기)" if places else ""),
@@ -335,20 +392,22 @@ class KoreanGuideFlow:
         json_path.write_text(json.dumps(
             {"guide": guide, "jsonld": guide_jsonld(guide), "photo_credits": credits}, ensure_ascii=False, indent=2,
         ), encoding="utf-8")
-        concept_state["guide_ko"] = {
+        concept_state[kind.key] = {
             "guide": guide, "html": str(html_path), "json": str(json_path), "fixes_applied": applied,
             "open_issues": remaining, "checks": checks, "nights": nights, "photo_credits": credits,
             "refuted_fixes": refuted,
-            "season": season,
+            "season": season, "style": "journey" if journey else "guide",
         }
         self._db.update_project_state(project_id, "concept", concept_state)
         used = {str(guide.get("hero_photo") or "")} | {
             str(x.get("photo") or "") for d in guide.get("days") or [] if isinstance(d, dict)
             for x in [d, *[m for m in d.get("moments") or [] if isinstance(m, dict)]]
         }
-        lines = [f"*{guide.get('title')}*", str(guide.get("summary") or "")]
+        moments = sum(len(d.get("moments") or []) for d in guide.get("days") or [] if isinstance(d, dict))
+        lines = [f"*{guide.get('title')}*", str(guide.get("summary") or guide.get("criteria_line") or "")]
         notes = [
-            f"• {len(guide.get('days') or [])} days, {len(used & set(hotel_ids))} hotel photos placed"
+            f"• {len(guide.get('days') or [])} days" + (f", {moments} moments" if journey else "")
+            + f", {len(used & set(hotel_ids))} hotel photos placed"
             + (f", {len(used & set(place_ids.values()))} destination photos from Wikimedia Commons "
                "(free licences, credited on the page)" if places else ""),
             f"• Check: {'passed' if not fixes else f'{applied} fixes applied'}"
@@ -366,10 +425,15 @@ class KoreanGuideFlow:
             )
         if checks:
             notes.append(f"• {len(checks)} [확인 필요] items to confirm with the hotel")
+        if journey:
+            notes.append(
+                "• Season tips credited to the hotel (from its own documents)" if guide.get("season_tips_from_hotel")
+                else f"• Season tips not credited to the hotel{' (the hotel sent no such tips)' if tips_note else ''}"
+            )
         lines.append("\n".join(notes))
         lines.append(
-            "_Korean hotel guide below: HTML in the site's itinerary layout and JSON for the site. "
-            "The English draft and layouts in this thread are unchanged._"
+            f"_{kind.label} below: HTML in the site's {'hotel-journey' if journey else 'itinerary'} layout and JSON "
+            "for the site. The English draft and layouts in this thread are unchanged._"
         )
         return SideFlowResult(
             "\n\n".join(l for l in lines if l), 

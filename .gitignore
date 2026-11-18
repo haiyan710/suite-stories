@@ -18,6 +18,7 @@ ILTM_Cannes_Accommodation/
 *_Hotel_Partnerships_*.pdf
 My Documents*/
 references/
-# Generated output, runtime state and live regression reports stay local
-artifacts/
-data/
+# Generated output, runtime state and live regression reports stay local (root only:
+# app/artifacts/ is code)
+/artifacts/
+/data/

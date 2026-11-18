@@ -2,7 +2,13 @@
   "case": "korean_hotel_guide_side_flow",
   "request": "hotel guide",
   "evaluation_only": true,
-  "required": ["shape", "photos_once", "season_photos", "daylight", "credits"],
+  "required": [
+    "shape",
+    "photos_once",
+    "season_photos",
+    "daylight",
+    "credits"
+  ],
   "min_score": 8,
   "max_check_items": 20,
   "min_destination_photos": 1,
@@ -15,7 +21,14 @@
     "title_length: the title carries 'N박 N+1일'",
     "jsonld: one TouristTrip item per day",
     "check_items: a bounded number of [확인 필요] notes",
-    "destination_photos: at least one credited destination photo placed"
+    "destination_photos: at least one credited destination photo placed",
+    "journey pages (style 'journey'): the journey shape instead (story intro, 3-4 season tips, 3-8 moments a day in the 8 time labels, check-in on day 1 and check-out on the last day, no platform benefits); up to max_check_items_journey [확인 필요]"
   ],
-  "generator_must_not_receive": ["these criteria", "expected titles", "expected places"]
+  "generator_must_not_receive": [
+    "these criteria",
+    "expected titles",
+    "expected places"
+  ],
+  "max_check_items_journey": 30,
+  "request_journey": "hotel journey"
 }

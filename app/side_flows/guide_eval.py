@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
-from ..artifacts.guide_ko import guide_check_items, guide_jsonld, validate_guide
+from ..artifacts.guide_ko import guide_check_items, guide_jsonld, validate_guide, validate_journey
 from ..tools.commons import _month
 from ..tools.season import season_months
 
@@ -82,7 +82,8 @@ def evaluate_guide(stored: Mapping[str, Any], criteria: Mapping[str, Any] | None
     days = _days(guide)
     checks: list[GuideCheck] = []
 
-    issues = validate_guide(guide, nights=nights)
+    journey = stored.get("style") == "journey"
+    issues = (validate_journey if journey else validate_guide)(guide, nights=nights)
     checks.append(GuideCheck("shape", not issues, "; ".join(issues[:4])))
 
     repeated = [key for key, n in Counter(_photo_uses(guide)).items() if n > 1]
@@ -129,7 +130,7 @@ def evaluate_guide(stored: Mapping[str, Any], criteria: Mapping[str, Any] | None
     checks.append(GuideCheck("jsonld", listed == len(days) > 0, f"{listed} itinerary items for {len(days)} days"))
 
     open_items = len(guide_check_items(guide))
-    limit = int(criteria.get("max_check_items", 20))
+    limit = int(criteria.get("max_check_items_journey" if journey else "max_check_items", 30 if journey else 20))
     checks.append(GuideCheck("check_items", open_items <= limit, f"{open_items} [확인 필요] (limit {limit})"))
 
     min_places = int(criteria.get("min_destination_photos", 0))
