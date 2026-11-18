@@ -217,7 +217,7 @@ class KoreanGuideFlow:
                     "local_path": photo.local_path, "credit": photo.credit, "evidence": place,
                     "title": photo.title.removeprefix("File:"), "page_url": photo.page_url,
                     "artist": photo.artist, "licence": photo.licence, "licence_url": photo.licence_url,
-                    "source": "wikimedia_commons",
+                    "taken": photo.taken, "source": "wikimedia_commons",
                 }
         return chosen
 
@@ -326,7 +326,7 @@ class KoreanGuideFlow:
                  + (" · 관광지 사진: Wikimedia Commons (각 사진에 저작자·라이선스 표기)" if places else ""),
         ), encoding="utf-8")
         credits = {
-            place_ids[place]: {k: a[k] for k in ("title", "page_url", "artist", "licence", "licence_url")} | {"place": place}
+            place_ids[place]: {k: a.get(k, "") for k in ("title", "page_url", "artist", "licence", "licence_url", "taken")} | {"place": place}
             for place, a in places.items()
         }
         json_path.write_text(json.dumps(

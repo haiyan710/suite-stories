@@ -44,7 +44,10 @@ the bot posts its progress as a log in the Slack thread and ends with:
    come back" strip.
 4. **Options** (on request): "give me 3 options" returns clearly different
    angles (A, B, C) in one thread; the team can switch between them, draft
-   any of them, or combine two ("B's structure with C's voice").
+   any of them, or combine two ("B's structure with C's voice"). Three
+   independent judges (the traveller, the evidence, the editor) score the
+   options; their pick becomes active, and what it could take from another
+   option is one "combine as recommended" away.
 
 ### Side flow: Korean hotel guide
 
@@ -220,7 +223,7 @@ and 2 visual revision cycles.
   question cannot swallow the next request, and "what's the status?" answers
   with the stage and the next things to say.
 - **Methodology lives in prompts.** Editorial behaviour is in
-  `app/prompts/*.md` (28 files). Tune those files before adding code.
+  `app/prompts/*.md` (29 files). Tune those files before adding code.
 
 ---
 
@@ -243,8 +246,10 @@ app/
     calendar.py            trip dates, weekdays and Korean holidays, computed in Python
     draft_checks.py        deterministic draft fixes and checks (dates, house style, closures)
     golden.py              non-leaking quality evaluator for the golden test
+    option_panel.py        three independent judges rank options A-D and suggest what to combine
   side_flows/
     korean_guide.py        side flow: the Korean hotel guide (runs beside the editorial flow, own state)
+    guide_eval.py          golden checks of a stored guide (shape, photos once, season, daylight, credits)
   agents/                  the seven specialists (see table above) + base protocol
   llm/
     base.py                LLMProvider protocol (complete, complete_with_search)
@@ -272,6 +277,7 @@ app/
 scripts/
   chat_cli.py              run the same pipeline in a terminal, no Slack
   run_golden.py            live golden regression (JSON report)
+  run_golden_guide.py      live golden of the Korean guide side flow, on a copy of the database
 deploy/launchd/            macOS launchd agent: start at login, restart on exit
 examples/                  sample output (draft + layout) from a real run
 tests/                     offline tests with fake LLM providers and fetchers
@@ -337,6 +343,7 @@ Restart it after a code change with
 @bot research <hotel>, 4 nights over Seollal 2027,
      for all traveller groups, 3 options            → options A-C on real dates, mixed party
 use option B / combine B and C: <what from each>    → switch or merge options
+rank the options / combine as recommended          → the judges' ranking; build their suggested mix
 write a sample draft                                → draft with QA verdict
 write a sample draft. <correction>                  → the correction overrides the stored concept
 make the layout / side by side / all four layouts   → HTML layout files in the thread
@@ -357,7 +364,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 302 tests run offline with fake LLM providers and fetchers. The live
+The 312 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 ## Limitations

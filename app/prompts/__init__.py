@@ -33,6 +33,7 @@ _FILES = {
     "guide_place_photos_look": "guide_place_photos_look.md",
     "lesson_generalize": "lesson_generalize.md",
     "verify_fixes": "verify_fixes.md",
+    "option_judge": "option_judge.md",
     "guest_experience": "guest_experience.md",
     "humanizer": "humanizer.md",
     "draft_fixes": "draft_fixes.md",

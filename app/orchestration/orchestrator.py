@@ -34,6 +34,7 @@ from ..states import (
 from .calendar import TripCalendar, parse_trip_calendar
 from .draft_checks import apply_calendar, check_draft
 from .fix_check import verify_fixes
+from .option_panel import PanelResult, format_panel, judge_options, option_digest
 from .handoffs import (
     ArtifactResult, BuildTask, CritiqueResult, CritiqueTask, DesignSpec, DesignTask, DraftResult, DraftTask,
     EditorialResult, EditorialTask, ResearchResult, ResearchTask,
@@ -1188,6 +1189,8 @@ class EditorialOrchestrator:
             return "Writer: drafting a sample article" + suffix
         if specialist == "logistics":
             return "Logistics: checking routes and travel times between stops"
+        if specialist == "option_panel":
+            return "Judges: comparing the options (traveller, evidence, editor)"
         if specialist == "fix_check":
             return "Critic: double-checking the suggested fixes against the evidence"
         if step_id == "draft_polish":
@@ -2378,19 +2381,34 @@ class EditorialOrchestrator:
             else:
                 texts.append(f"*Option {label}*: no candidate passed this time.\n\n{text}")
         self._option_note = ""
-        if options:
-            active = {k: v for k, v in options[0].items() if k in self.OPTION_KEYS}
+        panel = self._judge_options(project_id, hotel, research, options)
+        lead = next((o for o in options if panel and o["label"] == panel.recommended), options[0] if options else None)
+        if lead:
+            active = {k: v for k, v in lead.items() if k in self.OPTION_KEYS}
             self._db.update_project_state(project_id, "concept", {
-                **active, "options": options, "active_option": options[0]["label"],
+                **active, "options": options, "active_option": lead["label"],
+                **({"options_panel": panel.to_dict()} if panel else {}),
             })
+        if panel:
+            texts.append(format_panel(panel))
         labels = ", ".join(o["label"] for o in options)
         texts.append(
-            f"_Options {labels} are saved in this thread; A is active. Say \"use option B\", \"write a sample "
+            f"_Options {labels} are saved in this thread; {lead['label']} is active"
+            + (" (the judges' pick)" if panel else "") + ". Say \"use option B\", \"write a sample "
             "draft for option C\" or \"combine B and C: …\" (what to take from each)._"
-            if len(options) > 1 else ""
+            if len(options) > 1 and lead else ""
         )
         return "\n\n---\n\n".join(t for t in texts if t), first_id
 
+    _OPTION_RANK = re.compile(
+        r"\b(?:rank|judge|compare|score)\s+(?:the\s+|these\s+)?(?:options|versions)\b|\bwhich option is (?:the )?(?:best|strongest)\b|"
+        r"(?:chấm|xếp hạng|so sánh)\s+(?:các\s+)?phương án|phương án nào (?:tốt|hay|mạnh) nhất",
+        re.I,
+    )
+    _COMBINE_RECOMMENDED = re.compile(
+        r"\bcombine (?:as|the) (?:recommended|suggested)\b|\bcombine as the judges suggest|"
+        r"(?:kết hợp|gộp) theo (?:đề xuất|gợi ý)", re.I,
+    )
     _OPTION_PICK = re.compile(r"\b(?:use|choose|pick|select|go with|for|dùng|chọn)\s+(?:option|phương án|bản)\s+([A-D])\b", re.I)
     _OPTION_COMBINE = re.compile(
         r"\b(?:combine|merge|blend|gộp|kết hợp)\b.*?\b([A-D])\b(?:\s*(?:,|and|với|và|&|\+)\s*([A-D])\b)+", re.I | re.S,
@@ -2407,9 +2425,41 @@ class EditorialOrchestrator:
                 option.update({k: concept_state[k] for k in self.OPTION_KEYS if k in concept_state})
         fresh = {k: v for k, v in target.items() if k in self.OPTION_KEYS}
         self._db.update_project_state(project_id, "concept", {
-            **fresh, "options": options, "active_option": target["label"],
+            **fresh, "options": options, "active_option": target["label"], **self._panel_of(concept_state),
         })
         return True
+
+    @staticmethod
+    def _panel_of(concept_state: dict[str, Any]) -> dict[str, Any]:
+        return {"options_panel": concept_state["options_panel"]} if concept_state.get("options_panel") else {}
+
+    def _judge_options(
+        self, project_id: int, hotel: str, research: ResearchResult, options: list[dict[str, Any]],
+    ) -> PanelResult | None:
+        """Rank the saved options with independent judges (OPTION_PANEL); None when off, too few or failed."""
+        if not self._settings.option_panel or len(options) < 2:
+            return None
+        gated = self._gated_research(research)
+        focus = json.dumps([option_digest(o) for o in options], ensure_ascii=False)
+        piece_format = dict(options[0].get("format") or {})
+        context = {
+            "hotel": hotel,
+            "format": {k: piece_format.get(k) for k in ("type", "nights", "segment", "calendar") if piece_format.get(k)},
+            "recent_concepts": [
+                {k: c.get(k) for k in ("hotel", "concept", "status")} for c in self._memory_payload(project_id)[:20]
+            ],
+            "lessons": self._lesson_lines("concept"),
+        }
+        try:
+            return self._call("option_panel", lambda _t: judge_options(
+                self._provider, options, context=context,
+                evidence=compact_research_json(gated.to_dict(), budget_chars=16000, focus_text=focus),
+            ), None, project_id, step_id="option_panel")
+        except AgentCancelled:
+            raise
+        except Exception:
+            logger.warning("Option panel failed", exc_info=True)
+            return None
 
     def _option_command(
         self, user_text: str, project_id: int, project_state: dict[str, Any],
@@ -2417,6 +2467,33 @@ class EditorialOrchestrator:
         """Select or combine saved options. True: selected, carry on with the request."""
         text = self._plain_command(user_text)
         concept_state = dict(project_state.get("concept") or {})
+        if self._COMBINE_RECOMMENDED.search(text):
+            panel = PanelResult.from_dict(concept_state.get("options_panel"))
+            if not panel or not panel.combine_request():
+                return OrchestratorOutcome(
+                    "The judges have no combination to suggest here. Say \"rank the options\" to judge them, "
+                    "or \"combine B and C: …\" with what to take from each.", project_id=project_id,
+                )
+            labels = [panel.recommended, *dict.fromkeys(t["from"] for t in panel.take)]
+            return self._combine_options(project_id, project_state, labels, panel.combine_request())
+        if self._OPTION_RANK.search(text):
+            options = list(concept_state.get("options") or [])
+            research = ResearchResult.from_dict(project_state.get("research") or {})
+            hotel = str(project_state.get("project", {}).get("hotel", ""))
+            panel = self._judge_options(project_id, hotel, research, options)
+            if not panel:
+                return OrchestratorOutcome(
+                    "I couldn't get the judges' scores this time" if len(options) > 1 and self._settings.option_panel
+                    else "There need to be at least two saved options to compare.", project_id=project_id,
+                )
+            self._db.update_project_state(project_id, "concept", {**concept_state, "options_panel": panel.to_dict()})
+            active = concept_state.get("active_option")
+            return OrchestratorOutcome(
+                format_panel(panel) + (
+                    f"\n_Option {active} is still active; say \"use option {panel.recommended}\" to switch._"
+                    if active and active != panel.recommended else ""
+                ), project_id=project_id,
+            )
         if (m := self._OPTION_COMBINE.search(text)):
             labels = [l.upper() for l in re.findall(r"\b([A-Da-d])\b", m.group(0))]
             return self._combine_options(project_id, project_state, list(dict.fromkeys(labels)), text)
@@ -2468,7 +2545,9 @@ class EditorialOrchestrator:
             snapshot.update(label=label, title=str((fresh.get("outline") or {}).get("title") or ""),
                             combined_from=[o["label"] for o in chosen])
             options = [o for o in options if o.get("label") != label] + [snapshot]
-            self._db.update_project_state(project_id, "concept", {**fresh, "options": options, "active_option": label})
+            self._db.update_project_state(project_id, "concept", {
+                **fresh, "options": options, "active_option": label, **self._panel_of(concept_state),
+            })
             outcome = replace(outcome, markdown=f"*Option {label}* (combining {', '.join(o['label'] for o in chosen)})\n\n"
                               + outcome.markdown + f"\n\n_Option {label} is active; say \"write a sample draft\" to draft it._")
         else:
