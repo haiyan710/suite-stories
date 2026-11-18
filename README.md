@@ -367,6 +367,21 @@ critique this / show workflow / use v1 again
 The 313 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
+Two live golden checks score real output against criteria only, never
+expected answers:
+
+```bash
+.venv/bin/python scripts/run_golden.py                      # main flow: research and editorial on a fresh database
+.venv/bin/python scripts/run_golden_guide.py [--project N]  # side flow: Korean guide on a copy of the database
+```
+
+The guide check (`app/side_flows/guide_eval.py`, criteria in
+`tests/fixtures/golden_guide.json`) passes when the page has N+1 days in time
+order, uses each photo once, has destination photos dated in the trip's
+season and credited, puts no daylight sight after an early sunset and no
+open-air evening in the cold season, and leaves a bounded number of
+`[확인 필요]` notes. The live database is never written.
+
 ## Limitations
 
 - Many hotel chain sites block automated fetchers or render with JavaScript
