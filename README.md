@@ -396,6 +396,7 @@ expected answers:
 ```bash
 .venv/bin/python scripts/run_golden.py                      # main flow: research and editorial on a fresh database
 .venv/bin/python scripts/run_golden_guide.py [--project N]  # side flow: Korean guide on a copy of the database
+.venv/bin/python scripts/run_golden_guide.py --journey      # side flow: the hotel-journey page, same checks in its shape
 ```
 
 The guide check (`app/side_flows/guide_eval.py`, criteria in
