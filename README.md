@@ -225,7 +225,7 @@ and 2 visual revision cycles.
   question cannot swallow the next request, and "what's the status?" answers
   with the stage and the next things to say.
 - **Methodology lives in prompts.** Editorial behaviour is in
-  `app/prompts/*.md` (29 files). Tune those files before adding code.
+  `app/prompts/*.md` (30 files). Tune those files before adding code.
 
 ---
 
@@ -280,6 +280,7 @@ scripts/
   chat_cli.py              run the same pipeline in a terminal, no Slack
   run_golden.py            live golden regression (JSON report)
   run_golden_guide.py      live golden of the Korean guide side flow, on a copy of the database
+  ab_models.py             A/B one step's model on a real thread (DB copies, blind judge)
 deploy/launchd/            macOS launchd agent: start at login, restart on exit
 examples/                  sample output (draft + layout) from a real run
 tests/                     offline tests with fake LLM providers and fetchers
@@ -308,7 +309,16 @@ users can reply without mentioning it.
 - `claude_cli` runs `claude -p` under the Claude account logged in on the
   machine. `ANTHROPIC_API_KEY` is stripped from the child process, so it
   never switches to API billing. The researcher uses `CLAUDE_CLI_RESEARCH_MODEL`
-  and the other agents use `CLAUDE_CLI_MODEL`.
+  and the other agents use `CLAUDE_CLI_MODEL`. `STEP_MODELS` gives single steps
+  another model (`guide_write`, `guide_check`, `outline`, `option_judge`), chosen
+  by an A/B run on a real thread:
+
+  ```bash
+  .venv/bin/python scripts/ab_models.py --step guide_write --arms default,claude-sonnet-5-5 --runs 2
+  ```
+
+  Each arm runs on its own copy of the database; the report gives time, the
+  step's checks and a blind judge's verdict per run.
 - `zai` uses GLM through Z.ai (`ZAI_API_KEY`). `WRITER_PROVIDER=zai` lets GLM
   write drafts from public evidence, with a Claude fallback.
 - GLM is optional. With `WRITER_PROVIDER=claude_cli` every step runs on the
@@ -366,7 +376,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 316 tests run offline with fake LLM providers and fetchers. The live
+The 345 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 Two live golden checks score real output against criteria only, never
@@ -383,6 +393,12 @@ order, uses each photo once, has destination photos dated in the trip's
 season and credited, puts no daylight sight after an early sunset and no
 open-air evening in the cold season, and leaves a bounded number of
 `[확인 필요]` notes. The live database is never written.
+
+`tests/test_contracts.py` guards the seams between parts: every key Python
+reads from a model's JSON answer must be in that prompt's JSON example (and
+still be read), the side flow may read only the keys that travel with the
+active option and write only its own, and the golden evaluator must read what
+the side flow stores.
 
 ## Limitations
 

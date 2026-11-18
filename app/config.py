@@ -25,6 +25,16 @@ def _parse_user_allowlist(raw: str) -> frozenset[str]:
     return frozenset(uid.strip() for uid in raw.split(",") if uid.strip())
 
 
+def parse_step_models(value: str) -> tuple[tuple[str, str], ...]:
+    """"guide_write=claude-sonnet-5-5, outline=claude-opus-5-5" -> (("guide_write", "claude-sonnet-5-5"), ...)."""
+    pairs = []
+    for item in (value or "").split(","):
+        step, _, model = item.partition("=")
+        if step.strip() and model.strip():
+            pairs.append((step.strip(), model.strip()))
+    return tuple(pairs)
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime settings for the hotel research agent."""
@@ -73,6 +83,9 @@ class Settings:
     # is applied; refuted ones are dropped. load_settings turns it on; off keeps tests' call order.
     verify_fixes: bool = False
     option_panel: bool = False
+    # Per-step model overrides on the Claude CLI ("guide_write=claude-sonnet-5-5,outline=..."), chosen by
+    # A/B runs (scripts/ab_models.py). Steps: see STEP_ROLES in app/llm/__init__.py.
+    step_models: tuple[tuple[str, str], ...] = ()
     # Layout when a request names none: classic | zigzag | image_first | inline | hybrid.
     layout_style: str = "classic"
     photon_url: str = "https://photon.komoot.io/api/"
@@ -157,6 +170,7 @@ def load_settings(
         guide_season=env.get("GUIDE_SEASON", "1").strip().lower() not in {"0", "false", "no", ""},
         verify_fixes=env.get("VERIFY_FIXES", "1").strip().lower() not in {"0", "false", "no", ""},
         option_panel=env.get("OPTION_PANEL", "1").strip().lower() not in {"0", "false", "no", ""},
+        step_models=parse_step_models(env.get("STEP_MODELS", "")),
         layout_style=env.get("LAYOUT_STYLE", "hybrid").strip().lower() or "hybrid",
         photon_url=env.get("PHOTON_URL", "https://photon.komoot.io/api/").strip() or "https://photon.komoot.io/api/",
         osrm_url=(env.get("OSRM_URL", "https://routing.openstreetmap.de").strip() or "https://routing.openstreetmap.de").rstrip("/"),

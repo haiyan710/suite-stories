@@ -87,7 +87,8 @@ class KoreanGuideFlow:
 
     def __init__(
         self, host: EditorialHost, *, settings: Settings, db: Database, provider: LLMProvider,
-        fast_provider: LLMProvider, place_photos: CommonsPhotos | None = None,
+        fast_provider: LLMProvider, check_provider: LLMProvider | None = None,
+        place_photos: CommonsPhotos | None = None,
         season: SeasonClient | None = None, geo: GeoClient | None = None,
         step: Callable[[str], None] = lambda _label: None,
     ) -> None:
@@ -96,6 +97,8 @@ class KoreanGuideFlow:
         self._db = db
         self._provider = provider
         self._fast_provider = fast_provider
+        # The check against the plan; STEP_MODELS may give it another model than the fast one.
+        self._check_provider = check_provider or fast_provider
         self._place_photos = place_photos
         self._season = season
         self._geo = geo
@@ -272,7 +275,7 @@ class KoreanGuideFlow:
         refuted: list[dict[str, str]] = []
         self._step("checking it against the plan")
         try:
-            response = self._fast_provider.complete(
+            response = self._check_provider.complete(
                 [LLMMessage(role="user", content=json.dumps({
                     "guide": guide, "plan": plan, "stop_notes": payload["stop_notes"], "season": season,
                     "house_style": payload["house_style"],

@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ..agent import AgentCancelled, AgentError
 from ..agents import BuilderAgent, CriticAgent, DesignAgent, EditorialAgent, ResearchAgent, WriterAgent
@@ -17,6 +17,7 @@ from ..artifacts import ArtifactManager
 from ..artifacts.layout import embed_image, render_editorial_html, split_sections
 from ..artifacts.layout_styles import STYLES, Page, Photo, render_styled_html
 from ..config import Settings
+from ..llm import build_step_providers
 from ..llm.base import LLMError, LLMMessage, LLMProvider
 from ..llm.zai_glm import extract_json_block
 from ..prompts import load_prompt
@@ -86,8 +87,11 @@ class EditorialOrchestrator:
         place_photos: CommonsPhotos | None = None,
         season: SeasonClient | None = None,
         geo: GeoClient | None = None,
+        step_providers: Mapping[str, LLMProvider] | None = None,
     ) -> None:
         self._settings = settings
+        # Per-step model overrides (STEP_MODELS), chosen by A/B runs; empty by default.
+        self._step_providers = dict(step_providers if step_providers is not None else build_step_providers(settings))
         self._provider = provider
         self._db = db
         self._artifacts = artifacts or ArtifactManager(settings.artifacts_path, db)
@@ -2323,8 +2327,9 @@ class EditorialOrchestrator:
     # ---- side flows (run beside the editorial flow, never change its state) ---------------
     def _korean_guide(self, project_id: int, state: dict[str, Any]) -> OrchestratorOutcome:
         result = korean_guide.KoreanGuideFlow(
-            self, settings=self._settings, db=self._db, provider=self._provider,
-            fast_provider=self._fast_provider, place_photos=self._place_photos, season=self._season,
+            self, settings=self._settings, db=self._db, provider=self._step_provider("guide_write", self._provider),
+            fast_provider=self._fast_provider, check_provider=self._step_provider("guide_check", self._fast_provider),
+            place_photos=self._place_photos, season=self._season,
             geo=self._geo, step=lambda label: self._notify(STEP_PROGRESS_PREFIX + "Korean hotel guide: " + label),
         ).run(project_id, state)
         return OrchestratorOutcome(result.markdown, project_id=project_id, attachments=result.attachments)
@@ -2431,6 +2436,10 @@ class EditorialOrchestrator:
         })
         return True
 
+    def _step_provider(self, step: str, default: LLMProvider) -> LLMProvider:
+        """The model STEP_MODELS chose for this step, else the step's usual provider."""
+        return self._step_providers.get(step, default)
+
     @staticmethod
     def _panel_of(concept_state: dict[str, Any]) -> dict[str, Any]:
         return {"options_panel": concept_state["options_panel"]} if concept_state.get("options_panel") else {}
@@ -2454,7 +2463,7 @@ class EditorialOrchestrator:
         }
         try:
             return self._call("option_panel", lambda _t: judge_options(
-                self._provider, options, context=context,
+                self._step_provider("option_judge", self._provider), options, context=context,
                 evidence=compact_research_json(gated.to_dict(), budget_chars=16000, focus_text=focus),
             ), None, project_id, step_id="option_panel")
         except AgentCancelled:
@@ -3539,7 +3548,7 @@ class EditorialOrchestrator:
             payload["venues"] = venues
         try:
             self._notify(STEP_PROGRESS_PREFIX + "Writing it up as a short outline")
-            response = self._fast_provider.complete(
+            response = self._step_provider("outline", self._fast_provider).complete(
                 [LLMMessage(role="user", content=json.dumps(payload, ensure_ascii=False))],
                 system=load_prompt("outline"), max_tokens=1500, temperature=0.2,
             )
