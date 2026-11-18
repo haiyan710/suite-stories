@@ -168,3 +168,19 @@ def test_the_page_checks_read_the_html_the_team_receives(tmp_path: Path):
     html = render_journey_html(page, photos=photos, hotel="Hotel Mar")
     failed = {c.name for c in check_page_html(html, stored) if not c.passed}
     assert failed == {"placed_photos_rendered"}
+
+
+def test_a_journey_searches_photos_for_more_than_eight_places():
+    searched = []
+
+    class Commons:
+        def candidates(self, place, **kwargs):
+            searched.append(place)
+            return []
+
+    page = journey()
+    page["days"] = [{"day": i, "moments": [{"place": f"Sight {i}-{j}, Town"} for j in range(3)]} for i in range(1, 5)]
+    flow = korean_guide.KoreanGuideFlow(None, settings=None, db=None, provider=None, fast_provider=None,
+                                        place_photos=Commons())
+    flow._find_place_photos(page, {}, limit=korean_guide.JOURNEY_PLACE_LIMIT)
+    assert len(searched) == 12 and searched[-1] == "Sight 4-2, Town"

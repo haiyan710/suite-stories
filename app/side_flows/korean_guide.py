@@ -59,6 +59,7 @@ JOURNEY_TRIGGER = re.compile(
 )
 # Commons photos per place that Claude opens to judge the season (downloaded first).
 LOOK_CANDIDATES = 4
+JOURNEY_PLACE_LIMIT = 14
 
 
 def matches(text: str, state: dict[str, Any]) -> bool:
@@ -166,7 +167,7 @@ class KoreanGuideFlow:
             return {}
 
     def _find_place_photos(
-        self, guide: dict[str, Any], season: dict[str, Any] | None = None,
+        self, guide: dict[str, Any], season: dict[str, Any] | None = None, *, limit: int = 8,
     ) -> dict[str, dict[str, Any]]:
         """Freely licensed photos of the guide's outside sights: {place: asset}.
 
@@ -174,7 +175,7 @@ class KoreanGuideFlow:
         Claude opens the top candidates of each place and picks one in the trip's
         season, or none. A provider that cannot read images picks from the titles.
         """
-        places = guide_places(guide)
+        places = guide_places(guide, limit=limit)
         if not self._place_photos or not places:
             return {}
         self._step("finding destination photos")
@@ -365,7 +366,9 @@ class KoreanGuideFlow:
             tips_note = "season tips not credited to the hotel (no hotel document says them)"
         hotel_ids = list(photos)
         guide = dedupe_photos(guide)
-        places = self._find_place_photos(guide, season)
+        # The journey page names more sights (4-8 moments a day); a cap of 8 once left the
+        # last day's museum unsearched and its card empty.
+        places = self._find_place_photos(guide, season, limit=JOURNEY_PLACE_LIMIT if journey else 8)
         place_ids = {place: f"w{i}" for i, place in enumerate(places, 1)}
         photos.update({place_ids[place]: asset for place, asset in places.items()})
         guide = fill_empty_days(apply_place_photos(guide, place_ids), hotel_ids, outdoor=outdoor)
