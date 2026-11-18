@@ -404,7 +404,10 @@ The guide check (`app/side_flows/guide_eval.py`, criteria in
 order, uses each photo once, has destination photos dated in the trip's
 season and credited, puts no daylight sight after an early sunset and no
 open-air evening in the cold season, and leaves a bounded number of
-`[확인 필요]` notes. The live database is never written.
+`[확인 필요]` notes. It also reads the HTML page the team receives: every
+placed photo embedded as a real image (decoded, not linked to a local file),
+one credit per photo and the 사진 출처 list for Commons photos. The page is
+kept in `data/` for a look in the browser. The live database is never written.
 
 `tests/test_contracts.py` guards the seams between parts: every key Python
 reads from a model's JSON answer must be in that prompt's JSON example (and

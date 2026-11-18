@@ -143,3 +143,28 @@ def test_prices_are_not_mistaken_for_platform_benefits():
     page = journey()
     page["days"][0]["moments"][0]["text"] += " 공항에서 시내까지 정액 택시 요금은 €48이며, 입장권은 약 2유로입니다."
     assert validate_journey(page, nights=3) == []
+
+
+def test_the_page_checks_read_the_html_the_team_receives(tmp_path: Path):
+    from PIL import Image
+
+    from app.side_flows.guide_eval import check_page_html
+
+    image = tmp_path / "lobby.jpg"
+    Image.effect_noise((1600, 1000), 60).convert("RGB").save(image, quality=90)
+    photos = {
+        "p1": {"local_path": str(image), "evidence": "lobby"},
+        "w1": {"local_path": str(image), "credit": "A. Photographer · CC BY-SA 4.0 · Wikimedia Commons",
+               "title": "Square.jpg", "page_url": "https://commons.wikimedia.org/wiki/File:Square.jpg",
+               "artist": "A. Photographer", "licence": "CC BY-SA 4.0", "licence_url": "https://example.org/l"},
+    }
+    page = journey()
+    page["days"][1]["photo"] = "w1"
+    stored = {"guide": page, "photo_credits": {"w1": {"licence": "CC BY-SA 4.0", "page_url": photos["w1"]["page_url"]}}}
+    html = render_journey_html(page, photos=photos, hotel="Hotel Mar")
+    assert all(c.passed for c in check_page_html(html, stored)), check_page_html(html, stored)
+    # A photo id the writer made up renders as an empty box: the JSON says placed, the page shows none.
+    page["days"][2]["photo"] = "p9"
+    html = render_journey_html(page, photos=photos, hotel="Hotel Mar")
+    failed = {c.name for c in check_page_html(html, stored) if not c.passed}
+    assert failed == {"placed_photos_rendered"}

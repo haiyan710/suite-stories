@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 from app.config import load_settings  # noqa: E402
 from app.llm import build_provider  # noqa: E402
 from app.orchestration.orchestrator import EditorialOrchestrator  # noqa: E402
-from app.side_flows.guide_eval import evaluate_guide  # noqa: E402
+from app.side_flows.guide_eval import GuideEvaluation, check_page_html, evaluate_guide  # noqa: E402
 from app.states import DRAFTABLE_CONCEPTS  # noqa: E402
 from app.storage import Database  # noqa: E402
 
@@ -85,12 +85,27 @@ def main() -> int:
             key = "guide_journey" if args.journey else "guide_ko"
             stored = (db.project_state(int(project["id"])).get("concept") or {}).get(key) or {}
             evaluation = evaluate_guide(stored, fixture)
+            # The page the team receives: photos embedded and credited, nothing linked to a local file.
+            page_path = Path(str(stored.get("html") or ""))
+            if page_path.is_file():
+                page = page_path.read_text(encoding="utf-8")
+                kept = ROOT / "data" / f"golden_{'journey' if args.journey else 'guide'}_{stamp}.html"
+                kept.write_text(page, encoding="utf-8")
+                page_checks = check_page_html(page, stored)
+            else:
+                kept, page_checks = None, []
+                print("No HTML page was written", flush=True)
+            checks = evaluation.checks + tuple(page_checks)
+            evaluation = GuideEvaluation(
+                checks, sum(1 for c in checks if c.passed), len(checks),
+                evaluation.passed and bool(page_checks) and all(c.passed for c in page_checks),
+            )
             report = {
                 "case": fixture["case"], "project_id": project["id"],
                 "elapsed_seconds": round(time.monotonic() - started, 1),
                 "evaluation": evaluation.to_dict(), "response": outcome.markdown,
                 "guide": stored.get("guide"), "photo_credits": stored.get("photo_credits"),
-                "refuted_fixes": stored.get("refuted_fixes"),
+                "refuted_fixes": stored.get("refuted_fixes"), "page": str(kept) if kept else None,
             }
         finally:
             getattr(provider, "close", lambda: None)()

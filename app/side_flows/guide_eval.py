@@ -143,3 +143,48 @@ def evaluate_guide(stored: Mapping[str, Any], criteria: Mapping[str, Any] | None
     score = sum(1 for c in checks if c.passed)
     passed = all(c.passed for c in checks if c.name in required) and score >= int(criteria.get("min_score", 0))
     return GuideEvaluation(tuple(checks), score, len(checks), passed)
+
+
+def check_page_html(page: str, stored: Mapping[str, Any]) -> list[GuideCheck]:
+    """Checks on the HTML file the team receives: photos really embedded, credited, self-contained.
+
+    The stored JSON can be right while the page is not (a photo id the writer made up
+    renders as an empty box; a file path instead of an embedded image breaks once the
+    file is sent), so the golden run reads the page too.
+    """
+    import base64
+    import binascii
+
+    guide = dict(stored.get("guide") or {})
+    credits = dict(stored.get("photo_credits") or {})
+    images = re.findall(r'<img src="data:image/(\w+);base64,([A-Za-z0-9+/=]+)"', page)
+    broken = []
+    for index, (_kind, data) in enumerate(images):
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            broken.append(index)
+            continue
+        if len(raw) < 2000 or not raw.startswith((b"\xff\xd8", b"\x89PNG", b"RIFF")):
+            broken.append(index)
+    external = re.findall(r'<img src="(?!data:)([^"]+)"', page)
+    placed = {key for key in _photo_uses(guide)}
+    credit_spans = page.count('class="credit"')
+    missing_credits = [
+        key for key, c in credits.items()
+        if key in placed and html_escape(str(c.get("licence") or "")) not in page
+    ]
+    return [
+        GuideCheck("embedded_photos", bool(images) and not broken and not external,
+                   f"{len(images)} embedded, {len(broken)} broken, {len(external)} not embedded"),
+        GuideCheck("placed_photos_rendered", len(images) == len(placed) == credit_spans,
+                   f"{len(placed)} placed in the JSON, {len(images)} images and {credit_spans} credits on the page"),
+        GuideCheck("credits_on_page", not missing_credits and (not credits or "사진 출처" in page),
+                   f"licence missing on the page for {', '.join(missing_credits)}" if missing_credits else ""),
+    ]
+
+
+def html_escape(text: str) -> str:
+    import html
+
+    return html.escape(text)
