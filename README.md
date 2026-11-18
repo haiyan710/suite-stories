@@ -346,6 +346,7 @@ Hotel confirmed: <pasted reply>                     → confirms open claims and
 style rules / style rule: … / banned phrase: a | b  → house style, used by every draft
 feedback: <what was wrong>                          → one general lesson (with why) for the next runs
 lessons / lessons history / remove lesson #N        → the lessons and their change history
+replace lesson #A with #B / keep both #B            → settle a new lesson that contradicts an old one
 hotel contact: <name> / editor: <name>              → who the [ASK] notes are for
 critique this / show workflow / use v1 again
 ```
