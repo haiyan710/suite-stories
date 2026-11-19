@@ -82,7 +82,10 @@ free morning, parallel options for different tastes. The hotel appears every
 day, from check-in to check-out. Its first run in a thread researches cafés,
 bars, shopping and lunch spots. Tips are credited to the hotel only when the
 hotel's own documents say them, and booking-platform benefits are never
-written on either page.
+written on either page. The intro sets the mood and the hotel (about 500-750
+characters) and leaves weather numbers, sights and the day-by-day to the rest
+of the page. Destination photos are searched for every sight on the page (up
+to 14), and days left without a photo get the unused indoor hotel photos.
 
 Each step is checked by a critic before the team sees it, and every fact in
 the output can be traced to a stored source. The critic's suggested fixes are
@@ -387,7 +390,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 353 tests run offline with fake LLM providers and fetchers. The live
+The 357 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 Two live golden checks score real output against criteria only, never
