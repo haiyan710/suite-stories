@@ -522,11 +522,11 @@ def hotel_terms(hotel: str, *, names: list[str] = (), photo_files: list[str] = (
 
 
 def is_hotel_place(place: str, terms: list[str]) -> bool:
-    """A moment "place" that is the hotel or one of its outlets ("Giano, Rome" for the hotel's restaurant)."""
+    """A moment "place" that is the hotel or one of its outlets ("Grill Mar, Lisbon" for the hotel's restaurant)."""
     core = _plain_name(str(place).split(",")[0])
     if len(core) < 3:
         return False
-    # The hotel's name inside the place, never the other way round: "Rome" is in "W Rome".
+    # The hotel's name inside the place, never the other way round: "Lisbon" is in "Hotel Lisbon".
     return any(re.search(rf"\b{re.escape(term)}\b", core) for term in terms)
 
 
