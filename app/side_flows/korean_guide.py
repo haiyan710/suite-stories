@@ -30,7 +30,7 @@ from ..agent import AgentCancelled
 from ..artifacts import ArtifactManager
 from ..artifacts.guide_ko import (
     apply_place_photos, dedupe_photos, fill_empty_days, guide_check_items, guide_jsonld, guide_places,
-    hotel_tip_quotes_ok, is_outdoor, render_guide_html, render_journey_html, validate_guide, validate_journey,
+    hotel_terms, hotel_tip_quotes_ok, strip_hotel_places, is_outdoor, render_guide_html, render_journey_html, validate_guide, validate_journey,
 )
 from ..config import Settings
 from ..llm.base import LLMMessage, LLMProvider
@@ -168,6 +168,7 @@ class KoreanGuideFlow:
 
     def _find_place_photos(
         self, guide: dict[str, Any], season: dict[str, Any] | None = None, *, limit: int = 8,
+        exclude: list[str] | tuple[str, ...] = (),
     ) -> dict[str, dict[str, Any]]:
         """Freely licensed photos of the guide's outside sights: {place: asset}.
 
@@ -183,7 +184,8 @@ class KoreanGuideFlow:
         months = season_months(dates) if dates else set()
         names = month_names(dates) if dates else []
         candidates = {
-            place: self._place_photos.candidates(place, months=months, month_names=names) for place in places
+            place: self._place_photos.candidates(place, months=months, month_names=names, exclude=exclude)
+            for place in places
         }
         candidates = {place: found for place, found in candidates.items() if found}
         if not candidates:
@@ -366,9 +368,23 @@ class KoreanGuideFlow:
             tips_note = "season tips not credited to the hotel (no hotel document says them)"
         hotel_ids = list(photos)
         guide = dedupe_photos(guide)
+        # The hotel is illustrated only with the photos it sent; web photos are for outside sights.
+        terms = hotel_terms(
+            hotel,
+            names=[str(guide.get("hotel_en") or "")] + [
+                str(space.get("name") or "") for space in (concept_state.get("venues") or {}).get("hotel_spaces") or []
+                if isinstance(space, dict)
+            ],
+            photo_files=[str(asset.get("document") or "") for asset in photos.values()],
+        )
+        hotel_places = strip_hotel_places(guide, terms)
+        if hotel_places:
+            logger.info("Hotel moments kept to the hotel's photos: %s", hotel_places)
         # The journey page names more sights (4-8 moments a day); a cap of 8 once left the
         # last day's museum unsearched and its card empty.
-        places = self._find_place_photos(guide, season, limit=JOURNEY_PLACE_LIMIT if journey else 8)
+        places = self._find_place_photos(
+            guide, season, limit=JOURNEY_PLACE_LIMIT if journey else 8, exclude=terms,
+        )
         place_ids = {place: f"w{i}" for i, place in enumerate(places, 1)}
         photos.update({place_ids[place]: asset for place, asset in places.items()})
         guide = fill_empty_days(apply_place_photos(guide, place_ids), hotel_ids, outdoor=outdoor)

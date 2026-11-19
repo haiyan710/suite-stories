@@ -68,6 +68,10 @@ layout plus JSON for the site.
   sights before sunset and nothing out of season in the plan.
 - **Hotel photos** placed once each; spaces closed on the trip dates are left
   out, and outdoor spaces appear only where the day is spent there.
+- **The hotel is shown only with the photos it sent.** A moment in the hotel
+  (its rooms, restaurant, bar, spa) never gets a web photo, and a web photo of
+  a nearby sight that shows the hotel is skipped; without a fitting hotel
+  photo the slot stays empty for the editor.
 - **Destination photos** from Wikimedia Commons under free licences (CC0,
   public domain, CC BY, CC BY-SA), each credited with author and licence.
   Only photos taken in the trip's season are offered, and Claude looks at the
@@ -390,7 +394,7 @@ critique this / show workflow / use v1 again
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The 357 tests run offline with fake LLM providers and fetchers. The live
+The 359 tests run offline with fake LLM providers and fetchers. The live
 scripts in `scripts/` use the network and cost tokens.
 
 Two live golden checks score real output against criteria only, never

@@ -57,6 +57,10 @@ Rules:
   photo of it and leaves that moment's "photo" for it, so give such a moment no
   hotel photo. Leave "place" empty for the hotel, restaurants, bars, shops,
   the airport and transfers.
+  The hotel itself (its building, rooms, restaurant, bar, lounge, spa, pool,
+  courtyard, rooftop) is shown only with PHOTOS, the photos the hotel sent:
+  never give a moment held in the hotel a "place", even when it has a name
+  (the hotel's restaurant or bar). Without a fitting hotel photo, leave "".
 - A photo marked "outdoor" (rooftop, pool, terrace, courtyard, garden) goes
   only on a moment that takes place in that space and only if the plan has
   guests use it on the trip dates; never use one as a day or hero photo for a

@@ -203,8 +203,9 @@ class FakeCommons:
     def __init__(self, image_path):
         self.image_path, self.searched = image_path, []
 
-    def candidates(self, place, months=frozenset(), month_names=()):
+    def candidates(self, place, months=frozenset(), month_names=(), exclude=()):
         self.searched.append(place)
+        self.excluded = list(exclude)
         return [_commons(title="Other city fountain.jpg"), _commons()]
 
     def download(self, photo):
@@ -377,3 +378,48 @@ def test_the_guide_checks_its_fixes_from_the_other_side(tmp_path):
     saved = db.project_state(pid)["concept"]["guide_ko"]
     assert saved["refuted_fixes"][0]["reason"] == "the evidence names it"
     assert "1 suggested fix dropped after a second check" in outcome.markdown
+
+
+def test_the_hotel_is_never_illustrated_with_web_photos(tmp_path):
+    from app.artifacts.guide_ko import hotel_terms, is_hotel_place, strip_hotel_places
+    from app.tools.commons import CommonsPhotos
+
+    terms = hotel_terms("Harbour Grand Kobe", names=["Harbour Grand Kobe"],
+                        photo_files=["Sea Bird Restaurant.jpg", "Club Lounge interior.jpg"])
+    assert is_hotel_place("Sea Bird, Kobe", terms) and is_hotel_place("Harbour Grand Kobe, Kobe", terms)
+    assert not is_hotel_place("Kobe", terms) and not is_hotel_place("Kitano Ijinkan, Kobe", terms)
+    page = guide()
+    page["days"][0]["moments"][1]["place"] = "Sea Bird, Kobe"       # the hotel's own restaurant
+    page["days"][1]["moments"][0]["place"] = "Kitano Ijinkan, Kobe"  # an outside sight
+    assert strip_hotel_places(page, terms) == ["Sea Bird, Kobe"]
+    assert page["days"][0]["moments"][1]["place"] == "" and page["days"][1]["moments"][0]["place"]
+    # A web photo of an outside sight that shows the hotel is not offered.
+    commons = CommonsPhotos(tmp_path)
+    commons._search = lambda query, limit=30: [
+        _commons(title="Harbourland at night with Harbour Grand Kobe.jpg", description="Harbourland"),
+        _commons(title="Harbourland promenade.jpg", description="Harbourland"),
+    ]
+    found = commons.candidates("Harbourland, Kobe", exclude=terms)
+    assert [p.title for p in found] == ["File:Harbourland promenade.jpg"]
+
+
+def test_the_flow_searches_the_web_only_for_outside_sights(tmp_path):
+    from PIL import Image
+    o, db, pid, *_ = _draft_setup(tmp_path, [CritiqueResult(verdict="PASS", reasons=[])])
+    image = tmp_path / "sight.jpg"
+    Image.new("RGB", (1600, 1000)).save(image)
+    concept = dict(db.project_state(pid)["concept"])
+    concept["format"] = {"type": "itinerary", "nights": 3}
+    db.update_project_state(pid, "concept", concept)
+    hotel = db.project_state(pid)["project"]["hotel"]
+    written = guide(hero_photo="")
+    written["days"][0]["moments"][1].update(place=f"{hotel}, Kobe")           # the hotel itself
+    written["days"][1]["moments"][0].update(title="분수 광장", place="Fountain Square, Harbourtown")
+    o._provider = GuideProvider([written])
+    o._fast_provider = PickProvider({"verdict": "PASS", "fixes": []})
+    o._place_photos = commons = FakeCommons(image)
+    o.handle_message("hotel guide", user_id="U1", thread_key="C:1")
+    assert commons.searched == ["Fountain Square, Harbourtown"]
+    assert any(hotel.lower() in term for term in commons.excluded)
+    saved = db.project_state(pid)["concept"]["guide_ko"]["guide"]
+    assert saved["days"][0]["moments"][1]["place"] == "" and not saved["days"][0]["moments"][1]["photo"].startswith("w")

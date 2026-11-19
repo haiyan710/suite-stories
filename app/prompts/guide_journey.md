@@ -103,7 +103,11 @@ day, and a moment a photo only when one clearly shows it; leave "" otherwise
 museum, church, garden, square, street, market, viewpoint) gets a "place": its
 usual English name with the town ("Park Güell, Barcelona"), and no hotel
 photo; the app finds a freely licensed photo for it. Leave "place" empty for
-the hotel, restaurants, cafés, bars, shops and transfers. A photo marked
+the hotel, restaurants, cafés, bars, shops and transfers.
+The hotel itself (its building, rooms, restaurant, bar, lounge, spa, pool,
+courtyard, rooftop) is shown only with PHOTOS, the photos the hotel sent:
+never give a moment held in the hotel a "place", even when it has a name (the
+hotel's restaurant or bar). Without a fitting hotel photo, leave "". A photo marked
 "outdoor" goes only on a moment held in that space on the trip dates.
 
 ## Return JSON only

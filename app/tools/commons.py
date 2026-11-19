@@ -155,7 +155,7 @@ class CommonsPhotos:
 
     def candidates(
         self, place: str, limit: int = 8, *, months: set[int] | frozenset[int] = frozenset(),
-        month_names: list[str] | tuple[str, ...] = (),
+        month_names: list[str] | tuple[str, ...] = (), exclude: list[str] | tuple[str, ...] = (),
     ) -> list[CommonsPhoto]:
         """Usable photos of a place ("Park Güell, Barcelona"), best-ranked first, not downloaded.
 
@@ -178,6 +178,10 @@ class CommonsPhotos:
                 continue
             for photo in results:
                 if not self.usable(photo, place):
+                    continue
+                # The hotel is shown only with its own photos, never a web photo of it.
+                shown = re.sub(r"[^\w\s]", " ", f"{photo.title} {photo.description}".lower())
+                if any(re.search(rf"\b{re.escape(term)}\b", shown) for term in exclude):
                     continue
                 if months and _month(photo.taken) and _month(photo.taken) not in months:
                     continue

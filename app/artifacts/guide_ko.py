@@ -491,3 +491,51 @@ def render_journey_html(
         + (f'<p class="note">{html.escape(note)}</p>' if note else "")
         + "</body></html>"
     )
+
+
+# The hotel is shown only with the photos it sent: a moment held in the hotel (its rooms,
+# restaurant, bar, spa, courtyard) never gets a web photo, and a web photo of an outside
+# sight that shows the hotel is not used. These words name a kind of space, not a place.
+_SPACE_WORDS = re.compile(
+    r"\b(?:restaurant|ristorante|bar|lounge|lobby|suite|room|rooms|spa|pool|gym|terrace|rooftop|courtyard|"
+    r"garden|deck|cafe|café|bistro|jpe?g|png|tiff?|webp|photo|image|img|dsc|exterior|interior|at|dusk|night|day|the)\b",
+    re.I,
+)
+
+
+def _plain_name(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", str(text or "").lower())).strip()
+
+
+def hotel_terms(hotel: str, *, names: list[str] = (), photo_files: list[str] = ()) -> list[str]:
+    """Names that mean "the hotel": its own name and its outlets (from stop notes and photo files)."""
+    terms: list[str] = []
+    for raw in [hotel, *names]:
+        name = _plain_name(raw)
+        if len(name) >= 4 and name not in terms:
+            terms.append(name)
+    for file in photo_files:
+        stem = _plain_name(_SPACE_WORDS.sub(" ", re.sub(r"\.\w+$", "", str(file))))
+        if len(stem) >= 4 and stem not in terms:
+            terms.append(stem)
+    return terms
+
+
+def is_hotel_place(place: str, terms: list[str]) -> bool:
+    """A moment "place" that is the hotel or one of its outlets ("Giano, Rome" for the hotel's restaurant)."""
+    core = _plain_name(str(place).split(",")[0])
+    if len(core) < 3:
+        return False
+    # The hotel's name inside the place, never the other way round: "Rome" is in "W Rome".
+    return any(re.search(rf"\b{re.escape(term)}\b", core) for term in terms)
+
+
+def strip_hotel_places(guide: dict[str, Any], terms: list[str]) -> list[str]:
+    """Clear the "place" of moments held in the hotel, so they are shown only with the hotel's photos."""
+    cleared: list[str] = []
+    for day in guide.get("days") or []:
+        for moment in (day.get("moments") or []) if isinstance(day, dict) else []:
+            if isinstance(moment, dict) and moment.get("place") and is_hotel_place(moment["place"], terms):
+                cleared.append(str(moment["place"]))
+                moment["place"] = ""
+    return cleared
